@@ -1,14 +1,15 @@
 package client
 
 import (
+	"github.com/KumKeeHyun/godis/pkg/client"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	"log"
-	"net"
 )
 
 const (
-	keyServer = "server"
+	keyHost = "host"
+	keyPort = "port"
 )
 
 func New(vp *viper.Viper) *cobra.Command {
@@ -20,7 +21,8 @@ func New(vp *viper.Viper) *cobra.Command {
 	}
 
 	flags := cmd.Flags()
-	flags.String(keyServer, "localhost:6379", "server addr to send request")
+	flags.String(keyHost, "127.0.0.1", "host to connect server")
+	flags.String(keyPort, "6379", "port to connect server")
 	vp.BindPFlags(flags)
 
 	return cmd
@@ -28,22 +30,7 @@ func New(vp *viper.Viper) *cobra.Command {
 
 func runClient(vp *viper.Viper) error {
 	log.Println("start client")
-	log.Printf("send request to %s\n", vp.GetString(keyServer))
+	log.Printf("send request to %s:%s\n", vp.GetString(keyHost), vp.GetString(keyPort))
 
-	conn, err := net.Dial("tcp", vp.GetString(keyServer))
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
-
-	if _, err := conn.Write([]byte("hello server!")); err != nil {
-		return err
-	}
-
-	buf := make([]byte, 4096)
-	if _, err := conn.Read(buf); err != nil {
-		return err
-	}
-	log.Printf("recv: %s\n", string(buf))
-	return nil
+	return client.New(vp.GetString(keyHost), vp.GetString(keyPort)).Run()
 }

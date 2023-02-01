@@ -1,11 +1,10 @@
 package server
 
 import (
-	"fmt"
+	"github.com/KumKeeHyun/godis/pkg/server"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	"log"
-	"net"
 )
 
 const (
@@ -32,31 +31,5 @@ func New(vp *viper.Viper) *cobra.Command {
 func runServer(vp *viper.Viper) error {
 	log.Printf("start server in %s:%s\n", vp.GetString(keyHost), vp.GetString(keyPort))
 
-	l, err := net.Listen("tcp", fmt.Sprintf("%s:%s", vp.GetString(keyHost), vp.GetString(keyPort)))
-	if err != nil {
-		return err
-	}
-	defer l.Close()
-
-	for {
-		conn, err := l.Accept()
-		if err != nil {
-			return err
-		}
-
-		doSomething(conn)
-		conn.Close()
-	}
-}
-
-func doSomething(conn net.Conn) {
-	buf := make([]byte, 4096)
-
-	_, err := conn.Read(buf)
-	if err != nil {
-		return
-	}
-	log.Printf("recv: %s\n", string(buf))
-
-	conn.Write([]byte("hello client!"))
+	return server.New(vp.GetString(keyHost), vp.GetString(keyPort)).Run()
 }
