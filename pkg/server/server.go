@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"os"
 )
 
 type Server struct {
@@ -56,7 +57,8 @@ func (s *Server) handle(conn net.Conn) {
 	defer conn.Close()
 
 	raddr := conn.RemoteAddr().String()
-	p := resp.NewParser(conn)
+	//p := resp.NewParser(conn)
+	p := resp.NewParser(io.TeeReader(conn, os.Stdout))
 	w := resp.NewReplyWriter(conn)
 
 	for {
