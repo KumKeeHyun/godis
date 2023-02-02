@@ -10,10 +10,8 @@ import (
 )
 
 type Parser struct {
-	r *textproto.Reader
-
-	cur       Token
-	nextToken Token
+	r   *textproto.Reader
+	cur Token
 }
 
 func NewParser(r io.Reader) *Parser {
@@ -30,7 +28,7 @@ func (p *Parser) next() {
 
 func (p *Parser) readToken() Token {
 	if p.cur.Type == EOF {
-		return p.nextToken
+		return p.cur
 	}
 	b, err := p.r.ReadLineBytes()
 	if err != nil {
