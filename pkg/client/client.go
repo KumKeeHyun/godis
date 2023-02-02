@@ -4,9 +4,10 @@ import (
 	"bufio"
 	"context"
 	"fmt"
-	"github.com/KumKeeHyun/godis/pkg/command"
+	resp "github.com/KumKeeHyun/godis/pkg/resp2"
 	"net"
 	"os"
+	"strings"
 )
 
 type Client struct {
@@ -36,8 +37,8 @@ func (c *Client) Run() error {
 	}
 	defer conn.Close()
 
-	reader := bufio.NewReader(conn)
-	writer := bufio.NewWriter(conn)
+	p := resp.NewParser(conn)
+	w := resp.NewReplyWriter(conn)
 
 	scanner := bufio.NewScanner(os.Stdin)
 	for {
@@ -49,26 +50,34 @@ func (c *Client) Run() error {
 
 		fmt.Printf("%s> ", addr)
 		scanner.Scan()
-
 		text := scanner.Text()
 		if text == "exit" {
 			break
 		}
 
-		cmd := command.NewRequest(text)
-		if _, err := cmd.WriteTo(writer); err != nil {
-			return err
-		}
-		if err := writer.Flush(); err != nil {
+		if err := w.Write(newReply(text)); err != nil {
 			return err
 		}
 
-		resp := new(command.Response)
-		if _, err := resp.ReadFrom(reader); err != nil {
+		r, err := p.Parse()
+		if err != nil {
 			return err
 		}
-		fmt.Println(resp)
+		fmt.Println(r)
 	}
 
 	return scanner.Err()
+}
+
+func newReply(text string) resp.Reply {
+	s := strings.Split(text, " ")
+	r := &resp.ArrayReply{
+		Len:   len(s),
+		Value: make([]resp.Reply, len(s)),
+	}
+	for i, ss := range s {
+		r.Value[i] = &resp.SimpleStringReply{Value: ss}
+	}
+
+	return r
 }

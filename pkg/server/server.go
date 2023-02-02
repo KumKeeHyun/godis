@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/KumKeeHyun/godis/pkg/command"
+	resp "github.com/KumKeeHyun/godis/pkg/resp2"
 	"github.com/KumKeeHyun/godis/pkg/storage"
 	"io"
 	"log"
@@ -55,6 +56,9 @@ func (s *Server) handle(conn net.Conn) {
 	defer conn.Close()
 
 	raddr := conn.RemoteAddr().String()
+	p := resp.NewParser(conn)
+	w := resp.NewReplyWriter(conn)
+
 	for {
 		select {
 		case <-s.ctx.Done():
@@ -62,18 +66,17 @@ func (s *Server) handle(conn net.Conn) {
 		default:
 		}
 
-		req := new(command.Request)
-		_, err := req.ReadFrom(conn)
+		reply, err := p.Parse()
 		if err != nil {
 			if errors.Is(err, io.EOF) {
+				log.Printf("close %s\n", raddr)
 				break
 			}
 			log.Printf("failed to read request from %s: %v\n", raddr, err)
 			return
 		}
-		log.Printf("%s: %v\n", raddr, req)
 
-		if _, err := command.Parse(req).Run(s.storage).WriteTo(conn); err != nil {
+		if err := w.Write(command.Parse(reply).Run(s.storage)); err != nil {
 			log.Printf("failed to write to %s: %v\n", raddr, err)
 			return
 		}
