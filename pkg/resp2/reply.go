@@ -1,6 +1,7 @@
 package resp2
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 )
@@ -29,6 +30,10 @@ type Reply interface {
 	String() string
 }
 
+type StringReply interface {
+	Get() string
+}
+
 type SimpleStringReply struct {
 	Value string
 }
@@ -38,6 +43,10 @@ func (r *SimpleStringReply) Type() ReplyType {
 }
 
 func (r *SimpleStringReply) String() string {
+	return fmt.Sprintf("\"%s\"", r.Value)
+}
+
+func (r *SimpleStringReply) Get() string {
 	return r.Value
 }
 
@@ -76,7 +85,14 @@ func (r *BulkStringReply) Type() ReplyType {
 
 func (r *BulkStringReply) String() string {
 	if r.IsNil() {
-		return "nil"
+		return "(nil)"
+	}
+	return fmt.Sprintf("\"%s\"", r.Value)
+}
+
+func (r *BulkStringReply) Get() string {
+	if r.IsNil() {
+		return ""
 	}
 	return r.Value
 }
@@ -96,13 +112,12 @@ func (r *ArrayReply) Type() ReplyType {
 
 func (r *ArrayReply) String() string {
 	if r.IsNil() {
-		return "nil"
+		return "(nil)"
 	}
 
 	b := strings.Builder{}
-	for _, r := range r.Value {
-		b.WriteString(r.String())
-		b.WriteByte('\n')
+	for i, r := range r.Value {
+		b.WriteString(fmt.Sprintf("%d) %s\n", i+1, r.String()))
 	}
 	return b.String()
 }
