@@ -3,7 +3,7 @@ package command
 import (
 	"errors"
 	resp "github.com/KumKeeHyun/godis/pkg/resp2"
-	"github.com/KumKeeHyun/godis/pkg/storage"
+	"github.com/KumKeeHyun/godis/pkg/store"
 	"log"
 )
 
@@ -13,7 +13,7 @@ type (
 
 // Command temp interface for execute cmd
 type Command interface {
-	Run(storage storage.Storage) resp.Reply
+	Run(s *store.Store) resp.Reply
 }
 
 var parserFns = map[string]cmdParseFn{
@@ -47,7 +47,7 @@ type invalidCommand struct {
 	err error
 }
 
-func (cmd *invalidCommand) Run(storage storage.Storage) resp.Reply {
+func (cmd *invalidCommand) Run(s *store.Store) resp.Reply {
 	return &resp.ErrorReply{
 		Value: cmd.err.Error(),
 	}

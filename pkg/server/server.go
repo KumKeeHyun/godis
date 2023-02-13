@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"github.com/KumKeeHyun/godis/pkg/command"
 	resp "github.com/KumKeeHyun/godis/pkg/resp2"
-	"github.com/KumKeeHyun/godis/pkg/storage"
+	"github.com/KumKeeHyun/godis/pkg/store"
 	"io"
 	"log"
 	"net"
@@ -17,7 +17,7 @@ type Server struct {
 	host string
 	port string
 
-	storage storage.Storage
+	store *store.Store
 
 	ctx context.Context
 }
@@ -27,7 +27,6 @@ func New(host, port string) *Server {
 		host: host,
 		port: port,
 	}
-	s.storage = storage.New()
 	return s
 }
 
@@ -35,6 +34,8 @@ func (s *Server) Run() error {
 	if s.ctx == nil {
 		s.ctx = context.Background()
 	}
+
+	s.store = store.New(s.ctx)
 
 	addr := fmt.Sprintf("%s:%s", s.host, s.port)
 	l, err := net.Listen("tcp", addr)
@@ -78,7 +79,7 @@ func (s *Server) handle(conn net.Conn) {
 			return
 		}
 
-		if err := w.Write(command.Parse(reply).Run(s.storage)); err != nil {
+		if err := w.Write(command.Parse(reply).Run(s.store)); err != nil {
 			log.Printf("failed to write to %s: %v\n", raddr, err)
 			return
 		}

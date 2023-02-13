@@ -2,7 +2,7 @@ package command
 
 import (
 	resp "github.com/KumKeeHyun/godis/pkg/resp2"
-	"github.com/KumKeeHyun/godis/pkg/storage"
+	"github.com/KumKeeHyun/godis/pkg/store"
 )
 
 var parseHello cmdParseFn = func(replies []resp.Reply) Command {
@@ -13,7 +13,7 @@ var parseHello cmdParseFn = func(replies []resp.Reply) Command {
 
 type Hello struct{}
 
-func (cmd *Hello) Run(storage storage.Storage) resp.Reply {
+func (cmd *Hello) Run(s *store.Store) resp.Reply {
 	return &resp.ArrayReply{
 		Len: 14,
 		Value: []resp.Reply{

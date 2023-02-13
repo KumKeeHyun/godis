@@ -59,7 +59,7 @@ func (r *ErrorReply) Type() ReplyType {
 }
 
 func (r *ErrorReply) String() string {
-	return r.Value
+	return fmt.Sprintf("(error) %s", r.Value)
 }
 
 type IntegerReply struct {

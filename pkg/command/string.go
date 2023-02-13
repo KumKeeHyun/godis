@@ -1,9 +1,10 @@
 package command
 
 import (
+	"errors"
 	resp "github.com/KumKeeHyun/godis/pkg/resp2"
 	"github.com/KumKeeHyun/godis/pkg/sliceutil"
-	"github.com/KumKeeHyun/godis/pkg/storage"
+	"github.com/KumKeeHyun/godis/pkg/store"
 	"strconv"
 	"time"
 )
@@ -13,10 +14,19 @@ func mustInt(reply resp.Reply) (i int) {
 	return
 }
 
+func toStringEntry(e store.Entry) (se *store.StringEntry, ok bool) {
+	if e == nil {
+		return nil, true
+	}
+	se, ok = e.(*store.StringEntry)
+	return
+}
+
 var parseSet cmdParseFn = func(replies []resp.Reply) Command {
 	cmd := &Set{
-		key: replies[1].(resp.StringReply).Get(),
-		val: replies[2].(resp.StringReply).Get(),
+		key:  replies[1].(resp.StringReply).Get(),
+		val:  replies[2].(resp.StringReply).Get(),
+		from: time.Now(),
 	}
 
 	argIter := sliceutil.NewIterator(replies[3:])
@@ -58,6 +68,7 @@ type Set struct {
 	// get return the old string stored at key
 	get bool
 
+	from time.Time
 	// ttl set the specified expire time
 	// [0 | n]
 	ttl time.Duration
@@ -67,14 +78,54 @@ type Set struct {
 	keepTTL bool
 }
 
-func (cmd *Set) Run(storage storage.Storage) resp.Reply {
-	err := storage.Set(cmd.key, cmd.val)
-	if err != nil {
-		return &resp.ErrorReply{
-			Value: err.Error(),
-		}
+func (cmd *Set) expire() (time.Time, bool) {
+	if cmd.ttl != 0 {
+		return cmd.from.Add(cmd.ttl), true
 	}
-	return &resp.SimpleStringReply{Value: "OK"}
+	//if cmd.expireAt != time.Time{} {
+	//	return cmd.expireAt, true
+	//}
+	return time.Time{}, false
+}
+
+func (cmd *Set) Run(s *store.Store) resp.Reply {
+	var res resp.Reply = &resp.SimpleStringReply{Value: "OK"}
+
+	err := s.Update(func(tx *store.Tx) error {
+		oe, err := tx.Lookup(cmd.key)
+		if err != nil {
+			return err
+		}
+		old, ok := toStringEntry(oe)
+		if !ok {
+			return errors.New("WRONGTYPE Operation against a key holding the wrong kind of value")
+		}
+
+		if (cmd.mod == "nx" && old != nil) || (cmd.mod == "xx" && old == nil) {
+			res = &resp.BulkStringReply{Len: -1}
+			return nil
+		}
+
+		if cmd.get {
+			if old != nil {
+				res = &resp.BulkStringReply{Len: len(old.Val), Value: old.Val}
+			} else {
+				res = &resp.BulkStringReply{Len: -1}
+			}
+		}
+
+		ne := store.NewStrEntry(cmd.key, cmd.val)
+		if expireAt, ok := cmd.expire(); ok {
+			return tx.InsertEx(cmd.key, ne, expireAt)
+		} else {
+			return tx.Insert(cmd.key, ne)
+		}
+	})
+
+	if err != nil {
+		return &resp.ErrorReply{Value: err.Error()}
+	}
+	return res
 }
 
 var parseGet cmdParseFn = func(replies []resp.Reply) Command {
@@ -87,12 +138,25 @@ type Get struct {
 	key string
 }
 
-func (cmd *Get) Run(storage storage.Storage) resp.Reply {
-	val, err := storage.Get(cmd.key)
-	if err != nil {
-		return &resp.ErrorReply{
-			Value: "redis: nil",
+func (cmd *Get) Run(s *store.Store) resp.Reply {
+	var val string
+	err := s.Update(func(tx *store.Tx) error {
+		e, err := tx.Lookup(cmd.key)
+		if err != nil {
+			return err
 		}
+		if e == nil {
+			return errors.New("redis: nil")
+		}
+		if se, ok := e.(*store.StringEntry); !ok {
+			return errors.New("WRONGTYPE Operation against a key holding the wrong kind of value")
+		} else {
+			val = se.Val
+		}
+		return nil
+	})
+	if err != nil {
+		return &resp.ErrorReply{Value: err.Error()}
 	}
 	return &resp.BulkStringReply{Len: len(val), Value: val}
 }
@@ -115,21 +179,31 @@ type MGet struct {
 	keys []string
 }
 
-func (cmd *MGet) Run(storage storage.Storage) resp.Reply {
+func (cmd *MGet) Run(s *store.Store) resp.Reply {
 	res := &resp.ArrayReply{
 		Len:   len(cmd.keys),
 		Value: make([]resp.Reply, 0, len(cmd.keys)),
 	}
-	for _, key := range cmd.keys {
-		val, err := storage.Get(key)
-		if err != nil {
-			res.Value = append(res.Value, &resp.BulkStringReply{Len: -1})
-			continue
+	err := s.Update(func(tx *store.Tx) error {
+		for _, key := range cmd.keys {
+			e, err := tx.Lookup(key)
+			if err != nil {
+				return err
+			}
+			if e == nil {
+				res.Value = append(res.Value, &resp.BulkStringReply{Len: -1})
+				continue
+			}
+			if se, ok := e.(*store.StringEntry); !ok {
+				return errors.New("WRONGTYPE Operation against a key holding the wrong kind of value")
+			} else {
+				res.Value = append(res.Value, &resp.BulkStringReply{Len: len(se.Val), Value: se.Val})
+			}
 		}
-		res.Value = append(res.Value, &resp.BulkStringReply{
-			Len:   len(val),
-			Value: val,
-		})
+		return nil
+	})
+	if err != nil {
+		return &resp.ErrorReply{Value: err.Error()}
 	}
 	return res
 }
