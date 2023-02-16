@@ -38,6 +38,8 @@ type SimpleStringReply struct {
 	Value string
 }
 
+var OKReply *SimpleStringReply = &SimpleStringReply{Value: "OK"}
+
 func (r *SimpleStringReply) Type() ReplyType {
 	return SIMPLE_STRING
 }
@@ -52,6 +54,10 @@ func (r *SimpleStringReply) Get() string {
 
 type ErrorReply struct {
 	Value string
+}
+
+func NewErrorReply(err error) *ErrorReply {
+	return &ErrorReply{Value: err.Error()}
 }
 
 func (r *ErrorReply) Type() ReplyType {
@@ -77,6 +83,17 @@ func (r *IntegerReply) String() string {
 type BulkStringReply struct {
 	Len   int
 	Value string
+}
+
+func NewBulkStringReply(val string) *BulkStringReply {
+	return &BulkStringReply{
+		Len:   len(val),
+		Value: val,
+	}
+}
+
+func NewNilReply() *BulkStringReply {
+	return &BulkStringReply{Len: -1}
 }
 
 func (r *BulkStringReply) Type() ReplyType {

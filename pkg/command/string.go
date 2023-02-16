@@ -1,7 +1,6 @@
 package command
 
 import (
-	"errors"
 	resp "github.com/KumKeeHyun/godis/pkg/resp2"
 	"github.com/KumKeeHyun/godis/pkg/sliceutil"
 	"github.com/KumKeeHyun/godis/pkg/store"
@@ -82,14 +81,15 @@ func (cmd *Set) expire() (time.Time, bool) {
 	if cmd.ttl != 0 {
 		return cmd.from.Add(cmd.ttl), true
 	}
-	//if cmd.expireAt != time.Time{} {
-	//	return cmd.expireAt, true
-	//}
-	return time.Time{}, false
+	empty := time.Time{}
+	if cmd.expireAt != empty {
+		return cmd.expireAt, true
+	}
+	return empty, false
 }
 
 func (cmd *Set) Run(s *store.Store) resp.Reply {
-	var res resp.Reply = &resp.SimpleStringReply{Value: "OK"}
+	var res resp.Reply = resp.OKReply
 
 	err := s.Update(func(tx *store.Tx) error {
 		oe, err := tx.Lookup(cmd.key)
@@ -98,19 +98,19 @@ func (cmd *Set) Run(s *store.Store) resp.Reply {
 		}
 		old, ok := toStringEntry(oe)
 		if !ok {
-			return errors.New("WRONGTYPE Operation against a key holding the wrong kind of value")
+			return ErrWrongType
 		}
 
 		if (cmd.mod == "nx" && old != nil) || (cmd.mod == "xx" && old == nil) {
-			res = &resp.BulkStringReply{Len: -1}
+			res = resp.NewNilReply()
 			return nil
 		}
 
 		if cmd.get {
 			if old != nil {
-				res = &resp.BulkStringReply{Len: len(old.Val), Value: old.Val}
+				res = resp.NewBulkStringReply(old.Val)
 			} else {
-				res = &resp.BulkStringReply{Len: -1}
+				res = resp.NewNilReply()
 			}
 		}
 
@@ -123,7 +123,7 @@ func (cmd *Set) Run(s *store.Store) resp.Reply {
 	})
 
 	if err != nil {
-		return &resp.ErrorReply{Value: err.Error()}
+		return resp.NewErrorReply(err)
 	}
 	return res
 }
@@ -146,19 +146,19 @@ func (cmd *Get) Run(s *store.Store) resp.Reply {
 			return err
 		}
 		if e == nil {
-			return errors.New("redis: nil")
+			return ErrNil
 		}
 		if se, ok := e.(*store.StringEntry); !ok {
-			return errors.New("WRONGTYPE Operation against a key holding the wrong kind of value")
+			return ErrWrongType
 		} else {
 			val = se.Val
 		}
 		return nil
 	})
 	if err != nil {
-		return &resp.ErrorReply{Value: err.Error()}
+		return resp.NewErrorReply(err)
 	}
-	return &resp.BulkStringReply{Len: len(val), Value: val}
+	return resp.NewBulkStringReply(val)
 }
 
 var parseMGet cmdParseFn = func(replies []resp.Reply) Command {
@@ -191,19 +191,19 @@ func (cmd *MGet) Run(s *store.Store) resp.Reply {
 				return err
 			}
 			if e == nil {
-				res.Value = append(res.Value, &resp.BulkStringReply{Len: -1})
+				res.Value = append(res.Value, resp.NewNilReply())
 				continue
 			}
 			if se, ok := e.(*store.StringEntry); !ok {
-				return errors.New("WRONGTYPE Operation against a key holding the wrong kind of value")
+				return ErrWrongType
 			} else {
-				res.Value = append(res.Value, &resp.BulkStringReply{Len: len(se.Val), Value: se.Val})
+				res.Value = append(res.Value, resp.NewBulkStringReply(se.Val))
 			}
 		}
 		return nil
 	})
 	if err != nil {
-		return &resp.ErrorReply{Value: err.Error()}
+		return resp.NewErrorReply(err)
 	}
 	return res
 }

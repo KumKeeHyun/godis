@@ -11,6 +11,11 @@ type (
 	cmdParseFn func(replies []resp.Reply) Command
 )
 
+var (
+	ErrNil             = errors.New("redis: nil")
+	ErrWrongType error = errors.New("WRONGTYPE Operation against a key holding the wrong kind of value")
+)
+
 // Command temp interface for execute cmd
 type Command interface {
 	Run(s *store.Store) resp.Reply
