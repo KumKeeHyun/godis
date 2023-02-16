@@ -4,7 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
-	resp "github.com/KumKeeHyun/godis/pkg/resp2"
+	"github.com/KumKeeHyun/godis/pkg/resp/v2"
 	"net"
 	"os"
 	"strings"
@@ -37,8 +37,8 @@ func (c *Client) Run() error {
 	}
 	defer conn.Close()
 
-	p := resp.NewParser(conn)
-	w := resp.NewReplyWriter(conn)
+	p := v2.NewParser(conn)
+	w := v2.NewReplyWriter(conn)
 
 	scanner := bufio.NewScanner(os.Stdin)
 	for {
@@ -69,14 +69,14 @@ func (c *Client) Run() error {
 	return scanner.Err()
 }
 
-func newReply(text string) resp.Reply {
+func newReply(text string) v2.Reply {
 	s := strings.Split(text, " ")
-	r := &resp.ArrayReply{
+	r := &v2.ArrayReply{
 		Len:   len(s),
-		Value: make([]resp.Reply, len(s)),
+		Value: make([]v2.Reply, len(s)),
 	}
 	for i, ss := range s {
-		r.Value[i] = &resp.SimpleStringReply{Value: ss}
+		r.Value[i] = &v2.SimpleStringReply{Value: ss}
 	}
 
 	return r

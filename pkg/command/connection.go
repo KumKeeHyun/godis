@@ -1,8 +1,8 @@
 package command
 
 import (
-	resp "github.com/KumKeeHyun/godis/pkg/resp2"
-	"github.com/KumKeeHyun/godis/pkg/store"
+	"context"
+	resp "github.com/KumKeeHyun/godis/pkg/resp/v2"
 )
 
 var parseHello cmdParseFn = func(replies []resp.Reply) Command {
@@ -13,7 +13,11 @@ var parseHello cmdParseFn = func(replies []resp.Reply) Command {
 
 type Hello struct{}
 
-func (cmd *Hello) Run(s *store.Store) resp.Reply {
+func (cmd *Hello) Command() string {
+	return "hello"
+}
+
+func (cmd *Hello) Apply(ctx context.Context) resp.Reply {
 	return &resp.ArrayReply{
 		Len: 14,
 		Value: []resp.Reply{

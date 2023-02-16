@@ -4,8 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/KumKeeHyun/godis/pkg/apply"
 	"github.com/KumKeeHyun/godis/pkg/command"
-	resp "github.com/KumKeeHyun/godis/pkg/resp2"
+	resp "github.com/KumKeeHyun/godis/pkg/resp/v2"
 	"github.com/KumKeeHyun/godis/pkg/store"
 	"io"
 	"log"
@@ -17,7 +18,8 @@ type Server struct {
 	host string
 	port string
 
-	store *store.Store
+	store   *store.Store
+	applier *apply.Applier
 
 	ctx context.Context
 }
@@ -36,6 +38,7 @@ func (s *Server) Run() error {
 	}
 
 	s.store = store.New(s.ctx)
+	s.applier = apply.NewApplier(s.store)
 
 	addr := fmt.Sprintf("%s:%s", s.host, s.port)
 	l, err := net.Listen("tcp", addr)
@@ -69,7 +72,7 @@ func (s *Server) handle(conn net.Conn) {
 		default:
 		}
 
-		reply, err := p.Parse()
+		req, err := p.Parse()
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				log.Printf("close %s\n", raddr)
@@ -79,7 +82,9 @@ func (s *Server) handle(conn net.Conn) {
 			return
 		}
 
-		if err := w.Write(command.Parse(reply).Run(s.store)); err != nil {
+		cmd := command.Parse(req)
+		res := s.applier.Apply(s.ctx, cmd)
+		if err := w.Write(res); err != nil {
 			log.Printf("failed to write to %s: %v\n", raddr, err)
 			return
 		}

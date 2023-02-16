@@ -1,4 +1,4 @@
-package resp2
+package v2
 
 import (
 	"fmt"

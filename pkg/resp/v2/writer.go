@@ -1,4 +1,4 @@
-package resp2
+package v2
 
 import (
 	"bufio"
@@ -44,7 +44,7 @@ func (rw *ReplyWriter) Write(r Reply) error {
 			}
 		}
 	default:
-		return errors.New("unexpected reply type")
+		return errors.New("resp: unexpected reply type")
 	}
 
 	return rw.w.W.Flush()

@@ -1,7 +1,8 @@
 package command
 
 import (
-	resp "github.com/KumKeeHyun/godis/pkg/resp2"
+	"context"
+	resp "github.com/KumKeeHyun/godis/pkg/resp/v2"
 	"github.com/KumKeeHyun/godis/pkg/sliceutil"
 	"github.com/KumKeeHyun/godis/pkg/store"
 	"strconv"
@@ -77,18 +78,11 @@ type Set struct {
 	keepTTL bool
 }
 
-func (cmd *Set) expire() (time.Time, bool) {
-	if cmd.ttl != 0 {
-		return cmd.from.Add(cmd.ttl), true
-	}
-	empty := time.Time{}
-	if cmd.expireAt != empty {
-		return cmd.expireAt, true
-	}
-	return empty, false
+func (cmd *Set) Command() string {
+	return "set"
 }
 
-func (cmd *Set) Run(s *store.Store) resp.Reply {
+func (cmd *Set) Apply(ctx context.Context, s *store.Store) resp.Reply {
 	var res resp.Reply = resp.OKReply
 
 	err := s.Update(func(tx *store.Tx) error {
@@ -128,6 +122,17 @@ func (cmd *Set) Run(s *store.Store) resp.Reply {
 	return res
 }
 
+func (cmd *Set) expire() (time.Time, bool) {
+	if cmd.ttl != 0 {
+		return cmd.from.Add(cmd.ttl), true
+	}
+	empty := time.Time{}
+	if cmd.expireAt != empty {
+		return cmd.expireAt, true
+	}
+	return empty, false
+}
+
 var parseGet cmdParseFn = func(replies []resp.Reply) Command {
 	return &Get{
 		key: replies[1].(resp.StringReply).Get(),
@@ -138,7 +143,11 @@ type Get struct {
 	key string
 }
 
-func (cmd *Get) Run(s *store.Store) resp.Reply {
+func (cmd *Get) Command() string {
+	return "get"
+}
+
+func (cmd *Get) Apply(ctx context.Context, s *store.Store) resp.Reply {
 	var val string
 	err := s.Update(func(tx *store.Tx) error {
 		e, err := tx.Lookup(cmd.key)
@@ -179,7 +188,11 @@ type MGet struct {
 	keys []string
 }
 
-func (cmd *MGet) Run(s *store.Store) resp.Reply {
+func (cmd *MGet) Command() string {
+	return "mget"
+}
+
+func (cmd *MGet) Apply(ctx context.Context, s *store.Store) resp.Reply {
 	res := &resp.ArrayReply{
 		Len:   len(cmd.keys),
 		Value: make([]resp.Reply, 0, len(cmd.keys)),

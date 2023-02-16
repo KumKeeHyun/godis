@@ -1,8 +1,9 @@
 package command
 
 import (
+	"context"
 	"errors"
-	resp "github.com/KumKeeHyun/godis/pkg/resp2"
+	resp "github.com/KumKeeHyun/godis/pkg/resp/v2"
 	"github.com/KumKeeHyun/godis/pkg/store"
 	"log"
 )
@@ -18,7 +19,15 @@ var (
 
 // Command temp interface for execute cmd
 type Command interface {
-	Run(s *store.Store) resp.Reply
+	Command() string
+}
+
+type EmptyCommand interface {
+	Apply(ctx context.Context) resp.Reply
+}
+
+type StoreCommand interface {
+	Apply(ctx context.Context, s *store.Store) resp.Reply
 }
 
 var parserFns = map[string]cmdParseFn{
@@ -52,7 +61,11 @@ type invalidCommand struct {
 	err error
 }
 
-func (cmd *invalidCommand) Run(s *store.Store) resp.Reply {
+func (cmd *invalidCommand) Command() string {
+	return "invalid"
+}
+
+func (cmd *invalidCommand) Apply(context.Context) resp.Reply {
 	return &resp.ErrorReply{
 		Value: cmd.err.Error(),
 	}
