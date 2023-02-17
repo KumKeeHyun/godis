@@ -5,7 +5,6 @@ import (
 	"errors"
 	resp "github.com/KumKeeHyun/godis/pkg/resp/v2"
 	"github.com/KumKeeHyun/godis/pkg/store"
-	"log"
 )
 
 type (
@@ -20,6 +19,12 @@ var (
 // Command temp interface for execute cmd
 type Command interface {
 	Command() string
+}
+
+type WriteCommand interface {
+	Command
+	Marshal() ([]byte, error)
+	Unmarshal([]byte) error
 }
 
 type EmptyCommand interface {
@@ -45,7 +50,6 @@ func Parse(r resp.Reply) Command {
 	if arrReply.IsNil() {
 		return &invalidCommand{errors.New("empty request")}
 	}
-	log.Println(arrReply.Value)
 
 	cmdName := arrReply.Value[0].(resp.StringReply).Get()
 	parse, exists := parserFns[cmdName]

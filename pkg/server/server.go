@@ -19,7 +19,7 @@ type Server struct {
 	port string
 
 	store   *store.Store
-	applier *apply.Applier
+	applier apply.Applier
 
 	ctx context.Context
 }

@@ -7,15 +7,19 @@ import (
 	"github.com/KumKeeHyun/godis/pkg/store"
 )
 
-type Applier struct {
+type Applier interface {
+	Apply(ctx context.Context, cmd command.Command) resp.Reply
+}
+
+type applier struct {
 	s *store.Store
 }
 
-func NewApplier(s *store.Store) *Applier {
-	return &Applier{s: s}
+func NewApplier(s *store.Store) Applier {
+	return &applier{s: s}
 }
 
-func (a *Applier) Apply(ctx context.Context, cmd command.Command) resp.Reply {
+func (a *applier) Apply(ctx context.Context, cmd command.Command) resp.Reply {
 	switch c := cmd.(type) {
 	case command.StoreCommand:
 		return c.Apply(ctx, a.s)
