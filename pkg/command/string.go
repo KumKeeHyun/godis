@@ -7,14 +7,8 @@ import (
 	resp "github.com/KumKeeHyun/godis/pkg/resp/v2"
 	"github.com/KumKeeHyun/godis/pkg/sliceutil"
 	"github.com/KumKeeHyun/godis/pkg/store"
-	"strconv"
 	"time"
 )
-
-func mustInt(reply resp.Reply) (i int) {
-	i, _ = strconv.Atoi(reply.(resp.StringReply).Get())
-	return
-}
 
 func toStringEntry(e store.Entry) (se *store.StringEntry, ok bool) {
 	if e == nil {
@@ -26,8 +20,8 @@ func toStringEntry(e store.Entry) (se *store.StringEntry, ok bool) {
 
 var parseSet cmdParseFn = func(replies []resp.Reply) Command {
 	cmd := &Set{
-		Key:  replies[1].(resp.StringReply).Get(),
-		Val:  replies[2].(resp.StringReply).Get(),
+		Key:  mustString(replies[1]),
+		Val:  mustString(replies[2]),
 		From: time.Now(),
 	}
 
@@ -147,7 +141,7 @@ func (cmd *Set) expire() (time.Time, bool) {
 
 var parseGet cmdParseFn = func(replies []resp.Reply) Command {
 	return &Get{
-		Key: replies[1].(resp.StringReply).Get(),
+		Key: mustString(replies[1]),
 	}
 }
 

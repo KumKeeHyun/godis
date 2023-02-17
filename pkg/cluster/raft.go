@@ -24,10 +24,12 @@ type commit struct {
 type raftNode struct {
 	id    int
 	peers []string
+	join  bool
 
 	proposeCh    <-chan []byte
 	confChangeCh <-chan raftpb.ConfChange
 	commitCh     chan<- *commit
+	commitConfCh chan<- uint64
 
 	confState    raftpb.ConfState
 	appliedIndex uint64
@@ -42,16 +44,19 @@ type raftNode struct {
 	wg     *sync.WaitGroup
 }
 
-func newRaftNode(ctx context.Context, id int, peers []string, proposeCh <-chan []byte, confChangeCh <-chan raftpb.ConfChange) (<-chan *commit, func()) {
+func newRaftNode(ctx context.Context, id int, peers []string, join bool, proposeCh <-chan []byte, confChangeCh <-chan raftpb.ConfChange) (<-chan *commit, <-chan uint64, func()) {
 	commitCh := make(chan *commit)
+	commitConfCh := make(chan uint64, 1)
 
 	rn := &raftNode{
 		id:    id,
 		peers: peers,
+		join:  join,
 
 		proposeCh:    proposeCh,
 		confChangeCh: confChangeCh,
 		commitCh:     commitCh,
+		commitConfCh: commitConfCh,
 
 		wg: &sync.WaitGroup{},
 	}
@@ -59,7 +64,7 @@ func newRaftNode(ctx context.Context, id int, peers []string, proposeCh <-chan [
 	rn.raftStorage = raft.NewMemoryStorage()
 
 	go rn.start()
-	return commitCh, rn.stop
+	return commitCh, commitConfCh, rn.stop
 }
 
 func (rn *raftNode) start() {
@@ -78,7 +83,11 @@ func (rn *raftNode) start() {
 		MaxUncommittedEntriesSize: 1 << 30,
 	}
 
-	rn.node = raft.StartNode(cfg, rpeers)
+	if rn.join {
+		rn.node = raft.RestartNode(cfg)
+	} else {
+		rn.node = raft.StartNode(cfg, rpeers)
+	}
 
 	rn.transport = &rafthttp.Transport{
 		Logger:      nil,
@@ -210,6 +219,12 @@ func (rn *raftNode) publishEntries(ents []raftpb.Entry) (<-chan struct{}, bool) 
 				}
 				rn.transport.RemovePeer(types.ID(cc.NodeID))
 			}
+			if cc.ID != 0 {
+				select {
+				case rn.commitConfCh <- cc.ID:
+				case <-rn.ctx.Done():
+				}
+			}
 		}
 	}
 
@@ -250,6 +265,7 @@ func (rn *raftNode) stop() {
 
 	rn.transport.Stop()
 	close(rn.commitCh)
+	close(rn.commitConfCh)
 	rn.node.Stop()
 }
 

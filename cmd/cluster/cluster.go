@@ -13,6 +13,7 @@ const (
 	keyHost    = "host"
 	keyPort    = "port"
 	keyCluster = "cluster"
+	keyJoin    = "join"
 )
 
 func New(vp *viper.Viper) *cobra.Command {
@@ -28,16 +29,17 @@ func New(vp *viper.Viper) *cobra.Command {
 	flags.String(keyHost, "0.0.0.0", "addr to listen request")
 	flags.String(keyPort, "6379", "port to listen request")
 	flags.StringSlice(keyCluster, []string{"http://127.0.0.1:6300"}, "peers")
+	flags.Bool(keyJoin, false, "join")
 	vp.BindPFlags(flags)
 
 	return cmd
 }
 
 func runServer(vp *viper.Viper) error {
-	log.Printf("start server in id(%d) host(%s:%s) cluster(%v)\n", vp.GetInt(keyID), vp.GetString(keyHost), vp.GetString(keyPort), vp.GetStringSlice(keyCluster))
+	log.Printf("start server in id(%d) host(%s:%s) cluster(%v) join(%v)\n", vp.GetInt(keyID), vp.GetString(keyHost), vp.GetString(keyPort), vp.GetStringSlice(keyCluster), vp.GetBool(keyJoin))
 
 	s := cluster.New(vp.GetInt(keyID), vp.GetString(keyHost), vp.GetString(keyPort))
-	s.Start(context.Background(), vp.GetStringSlice(keyCluster))
+	s.Start(context.Background(), vp.GetStringSlice(keyCluster), vp.GetBool(keyJoin))
 
 	return nil
 }

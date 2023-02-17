@@ -11,6 +11,7 @@ import (
 	"github.com/KumKeeHyun/godis/pkg/store"
 	"go.etcd.io/etcd/pkg/v3/idutil"
 	"go.etcd.io/etcd/pkg/v3/wait"
+	"go.etcd.io/etcd/raft/v3/raftpb"
 	"log"
 	"time"
 )
@@ -21,8 +22,10 @@ type raftRequest struct {
 }
 
 type clusterApplier struct {
-	proposeCh chan<- []byte
-	commitCh  <-chan *commit
+	proposeCh    chan<- []byte
+	confChangeCh chan<- raftpb.ConfChange
+	commitCh     <-chan *commit
+	commitConfCh <-chan uint64
 
 	applier apply.Applier
 
@@ -33,16 +36,20 @@ type clusterApplier struct {
 func newClusterApplier(
 	store *store.Store,
 	proposeCh chan<- []byte,
+	confChangeCh chan<- raftpb.ConfChange,
 	commitCh <-chan *commit,
+	commitConfCh <-chan uint64,
 	w wait.Wait,
 	idGen *idutil.Generator) apply.Applier {
 
 	ca := &clusterApplier{
-		proposeCh: proposeCh,
-		commitCh:  commitCh,
-		applier:   apply.NewApplier(store),
-		w:         w,
-		idGen:     idGen,
+		proposeCh:    proposeCh,
+		confChangeCh: confChangeCh,
+		commitCh:     commitCh,
+		commitConfCh: commitConfCh,
+		applier:      apply.NewApplier(store),
+		w:            w,
+		idGen:        idGen,
 	}
 	go ca.applyCommits()
 	return ca
@@ -52,6 +59,12 @@ func (a *clusterApplier) Apply(ctx context.Context, cmd command.Command) resp.Re
 	switch c := cmd.(type) {
 	case command.WriteCommand:
 		res, err := a.processWriteCommand(ctx, c)
+		if err != nil {
+			return resp.NewErrorReply(err)
+		}
+		return res
+	case command.ConfChangeCommand:
+		res, err := a.processConfChangeCommand(ctx, c)
 		if err != nil {
 			return resp.NewErrorReply(err)
 		}
@@ -80,7 +93,7 @@ func (a *clusterApplier) processWriteCommand(ctx context.Context, cmd command.Wr
 	select {
 	case r := <-ch:
 		if r == nil {
-			return nil, errors.New("")
+			return nil, errors.New("cancel propose")
 		}
 		return r.(resp.Reply), nil
 	case <-cctx.Done():
@@ -89,7 +102,36 @@ func (a *clusterApplier) processWriteCommand(ctx context.Context, cmd command.Wr
 	}
 }
 
+func (a *clusterApplier) processConfChangeCommand(ctx context.Context, cmd command.ConfChangeCommand) (resp.Reply, error) {
+	cc := cmd.ConfChange()
+	cc.ID = a.idGen.Next()
+	ch := a.w.Register(cc.ID)
+
+	a.confChangeCh <- cmd.ConfChange()
+	cctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+
+	select {
+	case r := <-ch:
+		if r == nil {
+			return nil, errors.New("cancel propose")
+		}
+		return r.(resp.Reply), nil
+	case <-cctx.Done():
+		a.w.Trigger(cc.ID, nil)
+		return nil, errors.New("propose canceled by context")
+	}
+}
+
 func (a *clusterApplier) applyCommits() {
+	go func() {
+		for id := range a.commitConfCh {
+			log.Println("commit confChange", id)
+			if a.w.IsRegistered(id) {
+				a.w.Trigger(id, resp.OKReply)
+			}
+		}
+	}()
 	for commit := range a.commitCh {
 		if commit == nil {
 			// TODO: snapshot
