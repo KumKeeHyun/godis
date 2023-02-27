@@ -25,7 +25,6 @@ type clusterApplier struct {
 	proposeCh    chan<- []byte
 	confChangeCh chan<- raftpb.ConfChange
 	commitCh     <-chan *commit
-	commitConfCh <-chan uint64
 
 	applier apply.Applier
 
@@ -38,7 +37,6 @@ func newClusterApplier(
 	proposeCh chan<- []byte,
 	confChangeCh chan<- raftpb.ConfChange,
 	commitCh <-chan *commit,
-	commitConfCh <-chan uint64,
 	w wait.Wait,
 	idGen *idutil.Generator) apply.Applier {
 
@@ -46,7 +44,6 @@ func newClusterApplier(
 		proposeCh:    proposeCh,
 		confChangeCh: confChangeCh,
 		commitCh:     commitCh,
-		commitConfCh: commitConfCh,
 		applier:      apply.NewApplier(store),
 		w:            w,
 		idGen:        idGen,
@@ -104,34 +101,11 @@ func (a *clusterApplier) processWriteCommand(ctx context.Context, cmd command.Wr
 
 func (a *clusterApplier) processConfChangeCommand(ctx context.Context, cmd command.ConfChangeCommand) (resp.Reply, error) {
 	cc := cmd.ConfChange()
-	cc.ID = a.idGen.Next()
-	ch := a.w.Register(cc.ID)
-
-	a.confChangeCh <- cmd.ConfChange()
-	cctx, cancel := context.WithTimeout(ctx, 2*time.Second)
-	defer cancel()
-
-	select {
-	case r := <-ch:
-		if r == nil {
-			return nil, errors.New("cancel propose")
-		}
-		return r.(resp.Reply), nil
-	case <-cctx.Done():
-		a.w.Trigger(cc.ID, nil)
-		return nil, errors.New("propose canceled by context")
-	}
+	a.confChangeCh <- cc
+	return resp.OKReply, nil
 }
 
 func (a *clusterApplier) applyCommits() {
-	go func() {
-		for id := range a.commitConfCh {
-			log.Println("commit confChange", id)
-			if a.w.IsRegistered(id) {
-				a.w.Trigger(id, resp.OKReply)
-			}
-		}
-	}()
 	for commit := range a.commitCh {
 		if commit == nil {
 			// TODO: snapshot

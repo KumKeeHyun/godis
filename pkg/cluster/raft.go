@@ -7,10 +7,13 @@ import (
 	"go.etcd.io/etcd/raft/v3/raftpb"
 	"go.etcd.io/etcd/server/v3/etcdserver/api/rafthttp"
 	stats "go.etcd.io/etcd/server/v3/etcdserver/api/v2stats"
+	"go.etcd.io/etcd/server/v3/wal"
+	"go.etcd.io/etcd/server/v3/wal/walpb"
 	"go.uber.org/zap"
 	"log"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"sync"
 	"time"
@@ -22,55 +25,60 @@ type commit struct {
 }
 
 type raftNode struct {
-	id    int
-	peers []string
-	join  bool
+	id     int
+	peers  []string
+	join   bool
+	walDir string
 
 	proposeCh    <-chan []byte
 	confChangeCh <-chan raftpb.ConfChange
 	commitCh     chan<- *commit
-	commitConfCh chan<- uint64
 
 	confState    raftpb.ConfState
 	appliedIndex uint64
 
 	node        raft.Node
 	raftStorage *raft.MemoryStorage
-
-	transport *rafthttp.Transport
+	wal         *wal.WAL
+	transport   *rafthttp.Transport
 
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     *sync.WaitGroup
 }
 
-func newRaftNode(ctx context.Context, id int, peers []string, join bool, proposeCh <-chan []byte, confChangeCh <-chan raftpb.ConfChange) (<-chan *commit, <-chan uint64, func()) {
+func newRaftNode(ctx context.Context, id int, peers []string, join bool, walDir string, proposeCh <-chan []byte, confChangeCh <-chan raftpb.ConfChange) (<-chan *commit, func()) {
 	commitCh := make(chan *commit)
-	commitConfCh := make(chan uint64, 1)
 
 	rn := &raftNode{
-		id:    id,
-		peers: peers,
-		join:  join,
+		id:     id,
+		peers:  peers,
+		join:   join,
+		walDir: walDir,
 
 		proposeCh:    proposeCh,
 		confChangeCh: confChangeCh,
 		commitCh:     commitCh,
-		commitConfCh: commitConfCh,
 
 		wg: &sync.WaitGroup{},
 	}
 	rn.ctx, rn.cancel = context.WithCancel(ctx)
-	rn.raftStorage = raft.NewMemoryStorage()
 
 	go rn.start()
-	return commitCh, commitConfCh, rn.stop
+	return commitCh, rn.stop
 }
 
 func (rn *raftNode) start() {
 	rpeers := make([]raft.Peer, len(rn.peers))
 	for i := range rpeers {
 		rpeers[i] = raft.Peer{ID: uint64(i + 1)}
+	}
+
+	walExists := wal.Exist(rn.walDir)
+	rn.wal = rn.openWAL()
+	rn.raftStorage = raft.NewMemoryStorage()
+	if walExists {
+		rn.replayWAL()
 	}
 
 	cfg := &raft.Config{
@@ -83,7 +91,7 @@ func (rn *raftNode) start() {
 		MaxUncommittedEntriesSize: 1 << 30,
 	}
 
-	if rn.join {
+	if walExists || rn.join {
 		rn.node = raft.RestartNode(cfg)
 	} else {
 		rn.node = raft.StartNode(cfg, rpeers)
@@ -108,6 +116,35 @@ func (rn *raftNode) start() {
 	rn.wg.Add(2)
 	go rn.serveRaftHttp()
 	go rn.serveChannels()
+}
+
+func (rn *raftNode) openWAL() *wal.WAL {
+	if !wal.Exist(rn.walDir) {
+		if err := os.Mkdir(rn.walDir, 0750); err != nil {
+			log.Fatalf("cannot create dir for wal: %v", err)
+		}
+		w, err := wal.Create(zap.NewExample(), rn.walDir, nil)
+		if err != nil {
+			log.Fatalf("cannot create wal: %v", err)
+		}
+		return w
+	}
+
+	w, err := wal.Open(zap.NewExample(), rn.walDir, walpb.Snapshot{})
+	if err != nil {
+		log.Fatalf("failed to open wal: %v", err)
+	}
+	return w
+}
+
+func (rn *raftNode) replayWAL() {
+	_, state, ents, err := rn.wal.ReadAll()
+	if err != nil {
+		log.Fatalf("failed to read wal: %v", err)
+	}
+
+	rn.raftStorage.SetHardState(state)
+	rn.raftStorage.Append(ents)
 }
 
 func (rn *raftNode) serveRaftHttp() {
@@ -163,8 +200,10 @@ func (rn *raftNode) serveChannels() {
 			rn.node.Tick()
 
 		case rd := <-rn.node.Ready():
+			rn.wal.Save(rd.HardState, rd.Entries)
 			rn.raftStorage.Append(rd.Entries)
 			rn.transport.Send(rn.processMessage(rd.Messages))
+
 			_, ok := rn.publishEntries(rn.entriesToApply(rd.CommittedEntries))
 			if !ok {
 				return
@@ -219,12 +258,6 @@ func (rn *raftNode) publishEntries(ents []raftpb.Entry) (<-chan struct{}, bool) 
 				}
 				rn.transport.RemovePeer(types.ID(cc.NodeID))
 			}
-			if cc.ID != 0 {
-				select {
-				case rn.commitConfCh <- cc.ID:
-				case <-rn.ctx.Done():
-				}
-			}
 		}
 	}
 
@@ -265,7 +298,6 @@ func (rn *raftNode) stop() {
 
 	rn.transport.Stop()
 	close(rn.commitCh)
-	close(rn.commitConfCh)
 	rn.node.Stop()
 }
 
