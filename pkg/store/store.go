@@ -62,8 +62,8 @@ func (s *Store) processTTL() int {
 	now := time.Now()
 	works := 0
 
-	for i := s.heap.Peek(); i != nil && i.expireAt.Before(now); i = s.heap.Peek() {
-		entry := s.heap.Pop().ref
+	for i := s.heap.Peek(); i != nil && i.ExpireAt.Before(now); i = s.heap.Peek() {
+		entry := s.heap.Pop().Ref
 		delete(s.hmap, entry.Key())
 
 		works++
@@ -134,4 +134,14 @@ func (tx *Tx) Delete(key string) (err error) {
 		tx.s.heap.Remove(old)
 	}
 	return
+}
+
+func (s *Store) GetSnapshot() ([]byte, error) {
+	// TODO: serialize snapshot
+	return []byte("not yet implemented"), nil
+}
+
+func (s *Store) RecoverFromSnapshot(snapshot []byte) error {
+	// TODO: deserialize snapshot
+	return nil
 }

@@ -8,19 +8,19 @@ import (
 
 func TestHeap(t *testing.T) {
 	e1 := &BaseEntry{
-		key:  "1",
-		hidx: 0,
+		K:    "1",
+		HIdx: 0,
 	}
 	e2 := &StringEntry{
 		BaseEntry: BaseEntry{
-			key:  "2",
-			hidx: 0,
+			K:    "2",
+			HIdx: 0,
 		},
 		Val: "str",
 	}
 	e3 := &BaseEntry{
-		key:  "3",
-		hidx: 0,
+		K:    "3",
+		HIdx: 0,
 	}
 
 	h := newHeap(10)
@@ -29,7 +29,7 @@ func TestHeap(t *testing.T) {
 	h.Push(e3, time.Unix(3, 0))
 	h.Update(e2, time.Unix(4, 0))
 
-	assert.Equal(t, "3", h.Pop().ref.Key())
-	assert.Equal(t, "2", h.Pop().ref.Key())
-	assert.Equal(t, "1", h.Pop().ref.Key())
+	assert.Equal(t, "3", h.Pop().Ref.Key())
+	assert.Equal(t, "2", h.Pop().Ref.Key())
+	assert.Equal(t, "1", h.Pop().Ref.Key())
 }
