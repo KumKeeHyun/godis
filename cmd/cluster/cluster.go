@@ -15,6 +15,7 @@ const (
 	keyCluster = "cluster"
 	keyJoin    = "join"
 	keyWalDir  = "waldir"
+	keySnapDir = "snapdir"
 )
 
 func New(vp *viper.Viper) *cobra.Command {
@@ -32,6 +33,7 @@ func New(vp *viper.Viper) *cobra.Command {
 	flags.StringSlice(keyCluster, []string{"http://127.0.0.1:6300"}, "peers")
 	flags.Bool(keyJoin, false, "join")
 	flags.String(keyWalDir, "", "location of wal")
+	flags.String(keySnapDir, "", "location of snapshot")
 	vp.BindPFlags(flags)
 
 	return cmd
@@ -41,7 +43,13 @@ func runServer(vp *viper.Viper) error {
 	log.Printf("start server in id(%d) host(%s:%s) cluster(%v) join(%v)\n", vp.GetInt(keyID), vp.GetString(keyHost), vp.GetString(keyPort), vp.GetStringSlice(keyCluster), vp.GetBool(keyJoin))
 
 	s := cluster.New(vp.GetInt(keyID), vp.GetString(keyHost), vp.GetString(keyPort))
-	s.Start(context.Background(), vp.GetStringSlice(keyCluster), vp.GetBool(keyJoin), vp.GetString(keyWalDir))
+	s.Start(
+		context.Background(),
+		vp.GetStringSlice(keyCluster),
+		vp.GetBool(keyJoin),
+		vp.GetString(keyWalDir),
+		vp.GetString(keySnapDir),
+	)
 
 	return nil
 }

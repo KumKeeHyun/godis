@@ -6,6 +6,7 @@ import (
 	"go.etcd.io/etcd/raft/v3"
 	"go.etcd.io/etcd/raft/v3/raftpb"
 	"go.etcd.io/etcd/server/v3/etcdserver/api/rafthttp"
+	"go.etcd.io/etcd/server/v3/etcdserver/api/snap"
 	stats "go.etcd.io/etcd/server/v3/etcdserver/api/v2stats"
 	"go.etcd.io/etcd/server/v3/wal"
 	"go.etcd.io/etcd/server/v3/wal/walpb"
@@ -25,50 +26,86 @@ type commit struct {
 }
 
 type raftNode struct {
-	id     int
-	peers  []string
-	join   bool
-	walDir string
+	id          int
+	peers       []string
+	join        bool
+	walDir      string
+	snapDir     string
+	getSnapshot func() ([]byte, error)
 
 	proposeCh    <-chan []byte
 	confChangeCh <-chan raftpb.ConfChange
 	commitCh     chan<- *commit
 
-	confState    raftpb.ConfState
-	appliedIndex uint64
+	confState     raftpb.ConfState
+	appliedIndex  uint64
+	snapshotIndex uint64
 
 	node        raft.Node
 	raftStorage *raft.MemoryStorage
 	wal         *wal.WAL
 	transport   *rafthttp.Transport
 
+	snapCount     uint64
+	snapshotter   *snap.Snapshotter
+	snapshotReady chan *snap.Snapshotter
+
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     *sync.WaitGroup
 }
 
-func newRaftNode(ctx context.Context, id int, peers []string, join bool, walDir string, proposeCh <-chan []byte, confChangeCh <-chan raftpb.ConfChange) (<-chan *commit, func()) {
+var defaultSnapshotCount uint64 = 5
+var defaultSnapshotCatchUpEntries uint64 = 1
+
+//var defaultSnapshotCount uint64 = 10_000
+//var defaultSnapshotCatchUpEntries uint64 = 10_000
+
+func newRaftNode(
+	ctx context.Context,
+	id int,
+	peers []string,
+	join bool,
+	walDir string,
+	snapDir string,
+	getSnapshot func() ([]byte, error),
+	proposeCh <-chan []byte,
+	confChangeCh <-chan raftpb.ConfChange,
+) (<-chan *commit, <-chan *snap.Snapshotter, func()) {
 	commitCh := make(chan *commit)
+	snapshotReady := make(chan *snap.Snapshotter)
 
 	rn := &raftNode{
-		id:     id,
-		peers:  peers,
-		join:   join,
-		walDir: walDir,
+		id:          id,
+		peers:       peers,
+		join:        join,
+		walDir:      walDir,
+		snapDir:     snapDir,
+		getSnapshot: getSnapshot,
 
 		proposeCh:    proposeCh,
 		confChangeCh: confChangeCh,
 		commitCh:     commitCh,
+
+		snapCount:     defaultSnapshotCount,
+		snapshotReady: snapshotReady,
 
 		wg: &sync.WaitGroup{},
 	}
 	rn.ctx, rn.cancel = context.WithCancel(ctx)
 
 	go rn.start()
-	return commitCh, rn.stop
+	return commitCh, snapshotReady, rn.stop
 }
 
 func (rn *raftNode) start() {
+	if _, err := os.Stat(rn.snapDir); os.IsNotExist(err) {
+		if err := os.MkdirAll(rn.snapDir, 0750); err != nil {
+			log.Fatalf("cannot create dir for snapshot (%v)", err)
+		}
+	}
+	rn.snapshotter = snap.New(zap.NewExample(), rn.snapDir)
+
 	rpeers := make([]raft.Peer, len(rn.peers))
 	for i := range rpeers {
 		rpeers[i] = raft.Peer{ID: uint64(i + 1)}
@@ -80,6 +117,8 @@ func (rn *raftNode) start() {
 	if walExists {
 		rn.replayWAL()
 	}
+
+	rn.snapshotReady <- rn.snapshotter
 
 	cfg := &raft.Config{
 		ID:                        uint64(rn.id),
@@ -120,7 +159,7 @@ func (rn *raftNode) start() {
 
 func (rn *raftNode) openWAL() *wal.WAL {
 	if !wal.Exist(rn.walDir) {
-		if err := os.Mkdir(rn.walDir, 0750); err != nil {
+		if err := os.MkdirAll(rn.walDir, 0750); err != nil {
 			log.Fatalf("cannot create dir for wal: %v", err)
 		}
 		w, err := wal.Create(zap.NewExample(), rn.walDir, nil)
@@ -200,14 +239,23 @@ func (rn *raftNode) serveChannels() {
 			rn.node.Tick()
 
 		case rd := <-rn.node.Ready():
+			if !raft.IsEmptySnap(rd.Snapshot) {
+				rn.saveSnap(rd.Snapshot)
+			}
 			rn.wal.Save(rd.HardState, rd.Entries)
+
+			if !raft.IsEmptySnap(rd.Snapshot) {
+				rn.raftStorage.ApplySnapshot(rd.Snapshot)
+				rn.publishSnapshot(rd.Snapshot)
+			}
 			rn.raftStorage.Append(rd.Entries)
 			rn.transport.Send(rn.processMessage(rd.Messages))
 
-			_, ok := rn.publishEntries(rn.entriesToApply(rd.CommittedEntries))
+			applyDoneCh, ok := rn.publishEntries(rn.entriesToApply(rd.CommittedEntries))
 			if !ok {
 				return
 			}
+			rn.maybeTriggerSnapshot(applyDoneCh)
 			rn.node.Advance()
 
 		case <-rn.transport.ErrorC:
@@ -216,7 +264,24 @@ func (rn *raftNode) serveChannels() {
 			return
 		}
 	}
+}
 
+func (rn *raftNode) publishSnapshot(snapshot raftpb.Snapshot) {
+	if raft.IsEmptySnap(snapshot) {
+		return
+	}
+
+	log.Printf("publishing snapshot at index %d", rn.snapshotIndex)
+	defer log.Printf("finished publishing snapshot at index %d", rn.snapshotIndex)
+
+	if snapshot.Metadata.Index <= rn.appliedIndex {
+		log.Fatalf("snapshot index [%d] should > progress.appliedIndex [%d]", snapshot.Metadata.Index, rn.appliedIndex)
+	}
+	rn.commitCh <- nil // trigger kvstore to load snapshot
+
+	rn.confState = snapshot.Metadata.ConfState
+	rn.snapshotIndex = snapshot.Metadata.Index
+	rn.appliedIndex = snapshot.Metadata.Index
 }
 
 func (rn *raftNode) processMessage(msg []raftpb.Message) []raftpb.Message {
@@ -290,6 +355,60 @@ func (rn *raftNode) entriesToApply(ents []raftpb.Entry) (nents []raftpb.Entry) {
 		nents = ents[rn.appliedIndex-firstIdx+1:]
 	}
 	return
+}
+
+func (rn *raftNode) maybeTriggerSnapshot(applyDoneCh <-chan struct{}) {
+	if rn.appliedIndex-rn.snapshotIndex <= rn.snapCount {
+		return
+	}
+
+	if applyDoneCh != nil {
+		select {
+		case <-applyDoneCh:
+		case <-rn.ctx.Done():
+			return
+		}
+	}
+
+	log.Printf("start snapshot [applied index: %d | last snapshot index: %d]", rn.appliedIndex, rn.snapshotIndex)
+	data, err := rn.getSnapshot()
+	if err != nil {
+		log.Panic(err)
+	}
+	snapshot, err := rn.raftStorage.CreateSnapshot(rn.appliedIndex, &rn.confState, data)
+	if err != nil {
+		log.Panic(err)
+	}
+	if err := rn.saveSnap(snapshot); err != nil {
+		log.Panic(err)
+	}
+
+	// slow follower 를 위해 10K 정도는 남겨둠
+	compactIndex := uint64(1)
+	if rn.appliedIndex > defaultSnapshotCatchUpEntries {
+		compactIndex = rn.appliedIndex - defaultSnapshotCatchUpEntries
+	}
+	if err := rn.raftStorage.Compact(compactIndex); err != nil {
+		log.Panic(err)
+	}
+
+	log.Printf("compacted log at index %d", compactIndex)
+	rn.snapshotIndex = rn.appliedIndex
+}
+
+func (rn *raftNode) saveSnap(snapshot raftpb.Snapshot) error {
+	walSnap := walpb.Snapshot{
+		Index:     snapshot.Metadata.Index,
+		Term:      snapshot.Metadata.Term,
+		ConfState: &snapshot.Metadata.ConfState,
+	}
+	if err := rn.snapshotter.SaveSnap(snapshot); err != nil {
+		return err
+	}
+	if err := rn.wal.SaveSnapshot(walSnap); err != nil {
+		return err
+	}
+	return rn.wal.ReleaseLockTo(snapshot.Metadata.Index)
 }
 
 func (rn *raftNode) stop() {

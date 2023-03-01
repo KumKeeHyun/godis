@@ -40,7 +40,7 @@ func New(id int, host, port string) *server {
 	}
 }
 
-func (s *server) Start(ctx context.Context, peers []string, join bool, walDir string) {
+func (s *server) Start(ctx context.Context, peers []string, join bool, walDir, snapDir string) {
 	s.ctx, s.cancel = context.WithCancel(ctx)
 
 	w := wait.New()
@@ -49,9 +49,27 @@ func (s *server) Start(ctx context.Context, peers []string, join bool, walDir st
 
 	proposeCh := make(chan []byte)
 	confChangeCh := make(chan raftpb.ConfChange)
-	commitCh, stopRaftNode := newRaftNode(s.ctx, s.id, peers, join, walDir, proposeCh, confChangeCh)
+	commitCh, snapshotterCh, stopRaftNode := newRaftNode(
+		s.ctx,
+		s.id,
+		peers,
+		join,
+		walDir,
+		snapDir,
+		st.GetSnapshot,
+		proposeCh,
+		confChangeCh,
+	)
 
-	s.applier = newClusterApplier(st, proposeCh, confChangeCh, commitCh, w, idGen)
+	s.applier = newClusterApplier(
+		st,
+		proposeCh,
+		confChangeCh,
+		commitCh,
+		<-snapshotterCh,
+		w,
+		idGen,
+	)
 	s.serveClient()
 
 	stopRaftNode()

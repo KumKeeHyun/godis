@@ -12,6 +12,7 @@ import (
 	"go.etcd.io/etcd/pkg/v3/idutil"
 	"go.etcd.io/etcd/pkg/v3/wait"
 	"go.etcd.io/etcd/raft/v3/raftpb"
+	"go.etcd.io/etcd/server/v3/etcdserver/api/snap"
 	"log"
 	"time"
 )
@@ -22,9 +23,11 @@ type raftRequest struct {
 }
 
 type clusterApplier struct {
+	store        *store.Store
 	proposeCh    chan<- []byte
 	confChangeCh chan<- raftpb.ConfChange
 	commitCh     <-chan *commit
+	snapshotter  *snap.Snapshotter
 
 	applier apply.Applier
 
@@ -37,13 +40,16 @@ func newClusterApplier(
 	proposeCh chan<- []byte,
 	confChangeCh chan<- raftpb.ConfChange,
 	commitCh <-chan *commit,
+	snapshotter *snap.Snapshotter,
 	w wait.Wait,
 	idGen *idutil.Generator) apply.Applier {
 
 	ca := &clusterApplier{
+		store:        store,
 		proposeCh:    proposeCh,
 		confChangeCh: confChangeCh,
 		commitCh:     commitCh,
+		snapshotter:  snapshotter,
 		applier:      apply.NewApplier(store),
 		w:            w,
 		idGen:        idGen,
@@ -108,7 +114,16 @@ func (a *clusterApplier) processConfChangeCommand(ctx context.Context, cmd comma
 func (a *clusterApplier) applyCommits() {
 	for commit := range a.commitCh {
 		if commit == nil {
-			// TODO: snapshot
+			snapshot, err := a.loadSnapshot()
+			if err != nil {
+				log.Panic(err)
+			}
+			if snapshot != nil {
+				log.Printf("loading snapshot at term %d and index %d and size %d", snapshot.Metadata.Term, snapshot.Metadata.Index, len(snapshot.Data))
+				if err := a.store.RecoverFromSnapshot(snapshot.Data); err != nil {
+					log.Panic(err)
+				}
+			}
 			continue
 		}
 		for _, d := range commit.data {
@@ -116,6 +131,17 @@ func (a *clusterApplier) applyCommits() {
 		}
 		close(commit.applyDoneC)
 	}
+}
+
+func (a *clusterApplier) loadSnapshot() (*raftpb.Snapshot, error) {
+	snapshot, err := a.snapshotter.Load()
+	if err == snap.ErrNoSnapshot {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return snapshot, nil
 }
 
 func (a *clusterApplier) applyCommit(d []byte) {
