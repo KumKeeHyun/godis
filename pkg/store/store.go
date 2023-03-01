@@ -1,7 +1,11 @@
 package store
 
 import (
+	"bufio"
+	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
 	"log"
 	"time"
 )
@@ -136,12 +140,64 @@ func (tx *Tx) Delete(key string) (err error) {
 	return
 }
 
+type container struct {
+	Type     string          `json:"type"`
+	ExpireAt *time.Time      `json:"expireAt,omitempty"`
+	Entry    json.RawMessage `json:"entry"`
+}
+
 func (s *Store) GetSnapshot() ([]byte, error) {
-	// TODO: serialize snapshot
-	return []byte("not yet implemented"), nil
+	var buf bytes.Buffer
+
+	err := s.process(func(tx *Tx) error {
+		for _, ent := range tx.s.hmap {
+			entb, err := json.Marshal(ent)
+			if err != nil {
+				return fmt.Errorf("failed to marshal entry: %v", err)
+			}
+			c := container{
+				Type:  ent.Type(),
+				Entry: entb,
+			}
+			if ex, err := tx.s.heap.GetEx(ent); err == nil {
+				c.ExpireAt = &ex
+			}
+			b, err := json.Marshal(c)
+			if err != nil {
+				return fmt.Errorf("failed to marshal entry container: %v", err)
+			}
+			fmt.Fprintln(&buf, string(b))
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 func (s *Store) RecoverFromSnapshot(snapshot []byte) error {
-	// TODO: deserialize snapshot
-	return nil
+	r := bufio.NewScanner(bytes.NewReader(snapshot))
+	newhmap := make(map[string]Entry, 1_000_000)
+	newheap := newHeap(1_000)
+
+	for r.Scan() {
+		var c container
+		if err := json.Unmarshal(r.Bytes(), &c); err != nil {
+			fmt.Errorf("failed to unmarshal entry container: %v", err)
+		}
+		ent := entryOf(c.Type)
+		if err := json.Unmarshal(c.Entry, &ent); err != nil {
+			fmt.Errorf("failed to unmarshal entry: %v", err)
+		}
+		newhmap[ent.Key()] = ent
+		if c.ExpireAt != nil {
+			newheap.Push(ent, *c.ExpireAt)
+		}
+	}
+	return s.process(func(tx *Tx) error {
+		tx.s.hmap = newhmap
+		tx.s.heap = newheap
+		return nil
+	})
 }
