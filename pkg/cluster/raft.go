@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -27,7 +28,8 @@ type commit struct {
 
 type raftNode struct {
 	id          int
-	peers       []string
+	peerAddr    string
+	peers       *sync.Map
 	join        bool
 	walDir      string
 	snapDir     string
@@ -64,7 +66,9 @@ var defaultSnapshotCatchUpEntries uint64 = 1
 func newRaftNode(
 	ctx context.Context,
 	id int,
-	peers []string,
+	peerURL string,
+	initialCluster []string,
+	discovery []string,
 	join bool,
 	walDir string,
 	snapDir string,
@@ -75,9 +79,15 @@ func newRaftNode(
 	commitCh := make(chan *commit)
 	snapshotReady := make(chan *snap.Snapshotter)
 
+	URL, err := url.Parse(peerURL)
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	rn := &raftNode{
 		id:          id,
-		peers:       peers,
+		peerAddr:    URL.Host,
+		peers:       &sync.Map{},
 		join:        join,
 		walDir:      walDir,
 		snapDir:     snapDir,
@@ -94,22 +104,17 @@ func newRaftNode(
 	}
 	rn.ctx, rn.cancel = context.WithCancel(ctx)
 
-	go rn.start()
+	go rn.start(initialCluster, discovery)
 	return commitCh, snapshotReady, rn.stop
 }
 
-func (rn *raftNode) start() {
+func (rn *raftNode) start(initialCluster, discovery []string) {
 	if _, err := os.Stat(rn.snapDir); os.IsNotExist(err) {
 		if err := os.MkdirAll(rn.snapDir, 0750); err != nil {
 			log.Fatalf("cannot create dir for snapshot (%v)", err)
 		}
 	}
 	rn.snapshotter = snap.New(zap.NewExample(), rn.snapDir)
-
-	rpeers := make([]raft.Peer, len(rn.peers))
-	for i := range rpeers {
-		rpeers[i] = raft.Peer{ID: uint64(i + 1)}
-	}
 
 	walExists := wal.Exist(rn.walDir)
 	rn.wal = rn.openWAL()
@@ -131,8 +136,28 @@ func (rn *raftNode) start() {
 	}
 
 	if walExists || rn.join {
+		// join
+		rn.discoverCluster(discovery)
+
 		rn.node = raft.RestartNode(cfg)
 	} else {
+		// init cluster
+		for _, peer := range initialCluster {
+			idAndURL := strings.Split(peer, "@")
+			pid, err := strconv.Atoi(idAndURL[0])
+			if err != nil {
+				log.Fatalf("invalid peer format %v", peer)
+			}
+			rn.peers.Store(pid, idAndURL[1])
+		}
+
+		rpeers := make([]raft.Peer, 0)
+		rn.peers.Range(func(pid, _ any) bool {
+			rpeers = append(rpeers, raft.Peer{ID: uint64(pid.(int))})
+			return true
+		})
+		log.Printf("start with peers %v", rpeers)
+
 		rn.node = raft.StartNode(cfg, rpeers)
 	}
 
@@ -146,11 +171,12 @@ func (rn *raftNode) start() {
 		ErrorC:      make(chan error),
 	}
 	rn.transport.Start()
-	for i := range rn.peers {
-		if i+1 != rn.id {
-			rn.transport.AddPeer(types.ID(i+1), []string{rn.peers[i]})
+	rn.peers.Range(func(pid, purl any) bool {
+		if pid.(int) != rn.id {
+			rn.transport.AddPeer(types.ID(pid.(int)), []string{purl.(string)})
 		}
-	}
+		return true
+	})
 
 	rn.wg.Add(2)
 	go rn.serveRaftHttp()
@@ -189,17 +215,14 @@ func (rn *raftNode) replayWAL() {
 func (rn *raftNode) serveRaftHttp() {
 	defer rn.wg.Done()
 
-	rnUrl, err := url.Parse(rn.peers[rn.id-1])
-	if err != nil {
-		log.Fatalf("raftexample: Failed parsing URL (%v)", err)
-	}
-
-	ln, err := newKeepAliveListener(rn.ctx, rnUrl.Host)
+	ln, err := newKeepAliveListener(rn.ctx, rn.peerAddr)
 	if err != nil {
 		log.Fatalf("raftexample: Failed to listen rafthttp (%v)", err)
 	}
 
-	err = (&http.Server{Handler: rn.transport.Handler()}).Serve(ln)
+	mux := rn.transport.Handler().(*http.ServeMux)
+	mux.Handle(DiscoveryPrefix, rn.newDiscoveryHandler())
+	err = (&http.Server{Handler: mux}).Serve(ln)
 	log.Fatalf("failed to serve http: %v", err)
 }
 
@@ -314,14 +337,18 @@ func (rn *raftNode) publishEntries(ents []raftpb.Entry) (<-chan struct{}, bool) 
 			switch cc.Type {
 			case raftpb.ConfChangeAddNode:
 				if len(cc.Context) > 0 {
+					log.Printf("transport add peer %d@%s", cc.NodeID, string(cc.Context))
 					rn.transport.AddPeer(types.ID(cc.NodeID), []string{string(cc.Context)})
+					rn.peers.Store(int(cc.NodeID), string(cc.Context))
 				}
 			case raftpb.ConfChangeRemoveNode:
 				if cc.NodeID == uint64(rn.id) {
 					log.Println("I've been removed from the cluster! Shutting down.")
 					return nil, false
 				}
+				log.Printf("transport remove peer %d@%s", cc.NodeID, string(cc.Context))
 				rn.transport.RemovePeer(types.ID(cc.NodeID))
+				rn.peers.Delete(int(cc.NodeID))
 			}
 		}
 	}

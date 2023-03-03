@@ -3,7 +3,6 @@ package cluster
 import (
 	"context"
 	"errors"
-	"fmt"
 	"github.com/KumKeeHyun/godis/pkg/apply"
 	"github.com/KumKeeHyun/godis/pkg/command"
 	resp "github.com/KumKeeHyun/godis/pkg/resp/v2"
@@ -14,13 +13,13 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/url"
 	"time"
 )
 
 type server struct {
-	id   int
-	host string
-	port string
+	id         int
+	clientAddr string
 
 	store   *store.Store
 	applier apply.Applier
@@ -32,15 +31,18 @@ type server struct {
 	cancel context.CancelFunc
 }
 
-func New(id int, host, port string) *server {
+func New(id int, clientURL string) *server {
+	URL, err := url.Parse(clientURL)
+	if err != nil {
+		log.Fatal(err)
+	}
 	return &server{
-		id:   id,
-		host: host,
-		port: port,
+		id:         id,
+		clientAddr: URL.Host,
 	}
 }
 
-func (s *server) Start(ctx context.Context, peers []string, join bool, walDir, snapDir string) {
+func (s *server) Start(ctx context.Context, peerURL string, initialCluster, discovery []string, join bool, walDir, snapDir string) {
 	s.ctx, s.cancel = context.WithCancel(ctx)
 
 	w := wait.New()
@@ -52,7 +54,9 @@ func (s *server) Start(ctx context.Context, peers []string, join bool, walDir, s
 	commitCh, snapshotterCh, stopRaftNode := newRaftNode(
 		s.ctx,
 		s.id,
-		peers,
+		peerURL,
+		initialCluster,
+		discovery,
 		join,
 		walDir,
 		snapDir,
@@ -76,8 +80,7 @@ func (s *server) Start(ctx context.Context, peers []string, join bool, walDir, s
 }
 
 func (s *server) serveClient() {
-	addr := fmt.Sprintf("%s:%s", s.host, s.port)
-	ln, err := net.Listen("tcp", addr)
+	ln, err := net.Listen("tcp", s.clientAddr)
 	if err != nil {
 		log.Fatal(err)
 	}
