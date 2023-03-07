@@ -3,6 +3,7 @@ package cluster
 import (
 	"context"
 	"go.etcd.io/etcd/client/pkg/v3/types"
+	"go.etcd.io/etcd/pkg/v3/wait"
 	"go.etcd.io/etcd/raft/v3"
 	"go.etcd.io/etcd/raft/v3/raftpb"
 	"go.etcd.io/etcd/server/v3/etcdserver/api/rafthttp"
@@ -22,7 +23,7 @@ import (
 )
 
 type commit struct {
-	data       [][]byte
+	ents       []raftpb.Entry
 	applyDoneC chan<- struct{}
 }
 
@@ -38,6 +39,7 @@ type raftNode struct {
 	proposeCh    <-chan []byte
 	confChangeCh <-chan raftpb.ConfChange
 	commitCh     chan<- *commit
+	w            wait.Wait
 
 	confState     raftpb.ConfState
 	appliedIndex  uint64
@@ -73,6 +75,7 @@ func newRaftNode(
 	walDir string,
 	snapDir string,
 	getSnapshot func() ([]byte, error),
+	w wait.Wait,
 	proposeCh <-chan []byte,
 	confChangeCh <-chan raftpb.ConfChange,
 ) (<-chan *commit, <-chan *snap.Snapshotter, func()) {
@@ -96,6 +99,7 @@ func newRaftNode(
 		proposeCh:    proposeCh,
 		confChangeCh: confChangeCh,
 		commitCh:     commitCh,
+		w:            w,
 
 		snapCount:     defaultSnapshotCount,
 		snapshotReady: snapshotReady,
@@ -233,8 +237,6 @@ func (rn *raftNode) serveChannels() {
 	defer ticker.Stop()
 
 	go func() {
-		confChangeCnt := uint64(0)
-
 		for rn.proposeCh != nil && rn.confChangeCh != nil {
 			select {
 			case prop, ok := <-rn.proposeCh:
@@ -247,8 +249,6 @@ func (rn *raftNode) serveChannels() {
 				if !ok {
 					rn.proposeCh = nil
 				} else {
-					confChangeCnt++
-					cc.ID = confChangeCnt
 					rn.node.ProposeConfChange(context.TODO(), cc)
 				}
 			}
@@ -321,7 +321,7 @@ func (rn *raftNode) publishEntries(ents []raftpb.Entry) (<-chan struct{}, bool) 
 		return nil, true
 	}
 
-	data := make([][]byte, 0, len(ents))
+	cents := make([]raftpb.Entry, 0, len(ents))
 	for i := range ents {
 		switch ents[i].Type {
 		case raftpb.EntryNormal:
@@ -329,7 +329,7 @@ func (rn *raftNode) publishEntries(ents []raftpb.Entry) (<-chan struct{}, bool) 
 				// ignore empty messages
 				break
 			}
-			data = append(data, ents[i].Data)
+			cents = append(cents, ents[i])
 		case raftpb.EntryConfChange:
 			var cc raftpb.ConfChange
 			cc.Unmarshal(ents[i].Data)
@@ -350,15 +350,16 @@ func (rn *raftNode) publishEntries(ents []raftpb.Entry) (<-chan struct{}, bool) 
 				rn.transport.RemovePeer(types.ID(cc.NodeID))
 				rn.peers.Delete(int(cc.NodeID))
 			}
+			rn.w.Trigger(cc.ID, nil)
 		}
 	}
 
 	var applyDoneCh chan struct{}
 
-	if len(data) > 0 {
+	if len(cents) > 0 {
 		applyDoneCh = make(chan struct{}, 1)
 		select {
-		case rn.commitCh <- &commit{data, applyDoneCh}:
+		case rn.commitCh <- &commit{cents, applyDoneCh}:
 		case <-rn.ctx.Done():
 			return nil, false
 		}

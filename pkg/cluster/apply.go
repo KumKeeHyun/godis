@@ -107,8 +107,20 @@ func (a *clusterApplier) processWriteCommand(ctx context.Context, cmd command.Wr
 
 func (a *clusterApplier) processConfChangeCommand(ctx context.Context, cmd command.ConfChangeCommand) (resp.Reply, error) {
 	cc := cmd.ConfChange()
+	cc.ID = a.idGen.Next()
 	a.confChangeCh <- cc
-	return resp.OKReply, nil
+
+	ch := a.w.Register(cc.ID)
+	cctx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+
+	select {
+	case <-ch:
+		return resp.OKReply, nil
+	case <-cctx.Done():
+		a.w.Trigger(cc.ID, nil)
+		return nil, errors.New("propose canceled by context")
+	}
 }
 
 func (a *clusterApplier) applyCommits() {
@@ -126,8 +138,8 @@ func (a *clusterApplier) applyCommits() {
 			}
 			continue
 		}
-		for _, d := range commit.data {
-			a.applyCommit(d)
+		for _, ent := range commit.ents {
+			a.applyCommit(ent.Data)
 		}
 		close(commit.applyDoneC)
 	}

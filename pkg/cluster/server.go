@@ -61,6 +61,7 @@ func (s *server) Start(ctx context.Context, peerURL string, initialCluster, disc
 		walDir,
 		snapDir,
 		st.GetSnapshot,
+		w,
 		proposeCh,
 		confChangeCh,
 	)
