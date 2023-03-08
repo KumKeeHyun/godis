@@ -113,19 +113,24 @@ func newRaftNode(
 }
 
 func (rn *raftNode) start(initialCluster, discovery []string) {
+	walExists := wal.Exist(rn.walDir)
+	if walExists || rn.join {
+		if len(discovery) == 0 {
+			log.Fatal("discovery must not be empty when restarting or joining")
+		}
+	}
+	rn.wal = rn.openWAL(rn.walDir)
+	rn.raftStorage = raft.NewMemoryStorage()
+	if walExists {
+		rn.replayWAL(rn.raftStorage)
+	}
+
 	if _, err := os.Stat(rn.snapDir); os.IsNotExist(err) {
 		if err := os.MkdirAll(rn.snapDir, 0750); err != nil {
 			log.Fatalf("cannot create dir for snapshot (%v)", err)
 		}
 	}
 	rn.snapshotter = snap.New(zap.NewExample(), rn.snapDir)
-
-	walExists := wal.Exist(rn.walDir)
-	rn.wal = rn.openWAL()
-	rn.raftStorage = raft.NewMemoryStorage()
-	if walExists {
-		rn.replayWAL()
-	}
 
 	rn.snapshotReady <- rn.snapshotter
 
@@ -146,14 +151,7 @@ func (rn *raftNode) start(initialCluster, discovery []string) {
 		rn.node = raft.RestartNode(cfg)
 	} else {
 		// init cluster
-		for _, peer := range initialCluster {
-			idAndURL := strings.Split(peer, "@")
-			pid, err := strconv.Atoi(idAndURL[0])
-			if err != nil {
-				log.Fatalf("invalid peer format %v", peer)
-			}
-			rn.peers.Store(pid, idAndURL[1])
-		}
+		rn.initPeers(initialCluster)
 
 		rpeers := make([]raft.Peer, 0)
 		rn.peers.Range(func(pid, _ any) bool {
@@ -187,33 +185,44 @@ func (rn *raftNode) start(initialCluster, discovery []string) {
 	go rn.serveChannels()
 }
 
-func (rn *raftNode) openWAL() *wal.WAL {
-	if !wal.Exist(rn.walDir) {
-		if err := os.MkdirAll(rn.walDir, 0750); err != nil {
+func (rn *raftNode) initPeers(initialCluster []string) {
+	for _, peer := range initialCluster {
+		idAndURL := strings.Split(peer, "@")
+		pid, err := strconv.Atoi(idAndURL[0])
+		if err != nil {
+			log.Fatalf("invalid peer format %v", peer)
+		}
+		rn.peers.Store(pid, idAndURL[1])
+	}
+}
+
+func (rn *raftNode) openWAL(walDir string) *wal.WAL {
+	if !wal.Exist(walDir) {
+		if err := os.MkdirAll(walDir, 0750); err != nil {
 			log.Fatalf("cannot create dir for wal: %v", err)
 		}
-		w, err := wal.Create(zap.NewExample(), rn.walDir, nil)
+		w, err := wal.Create(zap.NewExample(), walDir, nil)
 		if err != nil {
 			log.Fatalf("cannot create wal: %v", err)
 		}
 		return w
 	}
 
-	w, err := wal.Open(zap.NewExample(), rn.walDir, walpb.Snapshot{})
+	w, err := wal.Open(zap.NewExample(), walDir, walpb.Snapshot{})
 	if err != nil {
 		log.Fatalf("failed to open wal: %v", err)
 	}
 	return w
 }
 
-func (rn *raftNode) replayWAL() {
+func (rn *raftNode) replayWAL(s *raft.MemoryStorage) {
 	_, state, ents, err := rn.wal.ReadAll()
 	if err != nil {
 		log.Fatalf("failed to read wal: %v", err)
 	}
 
-	rn.raftStorage.SetHardState(state)
-	rn.raftStorage.Append(ents)
+	s.SetHardState(state)
+	s.Append(ents)
 }
 
 func (rn *raftNode) serveRaftHttp() {
@@ -256,12 +265,17 @@ func (rn *raftNode) serveChannels() {
 		rn.cancel()
 	}()
 
+	islead := false
 	for {
 		select {
 		case <-ticker.C:
 			rn.node.Tick()
 
 		case rd := <-rn.node.Ready():
+			if rd.SoftState != nil {
+				islead = rd.RaftState == raft.StateLeader
+			}
+
 			if !raft.IsEmptySnap(rd.Snapshot) {
 				rn.saveSnap(rd.Snapshot)
 			}
@@ -272,13 +286,38 @@ func (rn *raftNode) serveChannels() {
 				rn.publishSnapshot(rd.Snapshot)
 			}
 			rn.raftStorage.Append(rd.Entries)
-			rn.transport.Send(rn.processMessage(rd.Messages))
 
 			applyDoneCh, ok := rn.publishEntries(rn.entriesToApply(rd.CommittedEntries))
 			if !ok {
 				return
 			}
-			rn.maybeTriggerSnapshot(applyDoneCh)
+
+			waitApply := false
+			if !islead {
+				for _, ent := range rd.CommittedEntries {
+					if ent.Type == raftpb.EntryConfChange {
+						waitApply = true
+						break
+					}
+				}
+			}
+			if !waitApply { // leader or does not have ConfChange
+				rn.transport.Send(rn.processMessage(rd.Messages))
+			}
+
+			// wait applyDone before trigger snapshot
+			if applyDoneCh != nil {
+				select {
+				case <-applyDoneCh:
+				case <-rn.ctx.Done():
+					return
+				}
+			}
+			if waitApply {
+				rn.transport.Send(rn.processMessage(rd.Messages))
+			}
+
+			rn.maybeTriggerSnapshot()
 			rn.node.Advance()
 
 		case <-rn.transport.ErrorC:
@@ -385,17 +424,9 @@ func (rn *raftNode) entriesToApply(ents []raftpb.Entry) (nents []raftpb.Entry) {
 	return
 }
 
-func (rn *raftNode) maybeTriggerSnapshot(applyDoneCh <-chan struct{}) {
+func (rn *raftNode) maybeTriggerSnapshot() {
 	if rn.appliedIndex-rn.snapshotIndex <= rn.snapCount {
 		return
-	}
-
-	if applyDoneCh != nil {
-		select {
-		case <-applyDoneCh:
-		case <-rn.ctx.Done():
-			return
-		}
 	}
 
 	log.Printf("start snapshot [applied index: %d | last snapshot index: %d]", rn.appliedIndex, rn.snapshotIndex)
