@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/gob"
+	"errors"
 	resp "github.com/KumKeeHyun/godis/pkg/resp/v2"
 	"github.com/KumKeeHyun/godis/pkg/sliceutil"
 	"github.com/KumKeeHyun/godis/pkg/store"
@@ -33,7 +34,7 @@ var parseSet cmdParseFn = func(replies []resp.Reply) Command {
 			cmd.Mod = token
 		case "xx":
 			cmd.Mod = token
-		case "Get":
+		case "get":
 			cmd.Get = true
 		case "ex":
 			ex := mustInt(argIter.Next())
@@ -49,6 +50,8 @@ var parseSet cmdParseFn = func(replies []resp.Reply) Command {
 			cmd.ExpireAt = time.UnixMilli(int64(pxat))
 		case "keepttl":
 			cmd.KeepTTL = true
+		default:
+			return &invalidCommand{errors.New("ERR illegal argument")}
 		}
 	}
 	return cmd
