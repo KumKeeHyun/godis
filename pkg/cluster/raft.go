@@ -265,17 +265,12 @@ func (rn *raftNode) serveChannels() {
 		rn.cancel()
 	}()
 
-	islead := false
 	for {
 		select {
 		case <-ticker.C:
 			rn.node.Tick()
 
 		case rd := <-rn.node.Ready():
-			if rd.SoftState != nil {
-				islead = rd.RaftState == raft.StateLeader
-			}
-
 			if !raft.IsEmptySnap(rd.Snapshot) {
 				rn.saveSnap(rd.Snapshot)
 			}
@@ -291,33 +286,9 @@ func (rn *raftNode) serveChannels() {
 			if !ok {
 				return
 			}
+			rn.transport.Send(rn.processMessage(rd.Messages))
 
-			waitApply := false
-			if !islead {
-				for _, ent := range rd.CommittedEntries {
-					if ent.Type == raftpb.EntryConfChange {
-						waitApply = true
-						break
-					}
-				}
-			}
-			if !waitApply { // leader or does not have ConfChange
-				rn.transport.Send(rn.processMessage(rd.Messages))
-			}
-
-			// wait applyDone before trigger snapshot
-			if applyDoneCh != nil {
-				select {
-				case <-applyDoneCh:
-				case <-rn.ctx.Done():
-					return
-				}
-			}
-			if waitApply {
-				rn.transport.Send(rn.processMessage(rd.Messages))
-			}
-
-			rn.maybeTriggerSnapshot()
+			rn.maybeTriggerSnapshot(applyDoneCh)
 			rn.node.Advance()
 
 		case <-rn.transport.ErrorC:
@@ -424,9 +395,17 @@ func (rn *raftNode) entriesToApply(ents []raftpb.Entry) (nents []raftpb.Entry) {
 	return
 }
 
-func (rn *raftNode) maybeTriggerSnapshot() {
+func (rn *raftNode) maybeTriggerSnapshot(applyDoneCh <-chan struct{}) {
 	if rn.appliedIndex-rn.snapshotIndex <= rn.snapCount {
 		return
+	}
+
+	if applyDoneCh != nil {
+		select {
+		case <-applyDoneCh:
+		case <-rn.ctx.Done():
+			return
+		}
 	}
 
 	log.Printf("start snapshot [applied index: %d | last snapshot index: %d]", rn.appliedIndex, rn.snapshotIndex)
