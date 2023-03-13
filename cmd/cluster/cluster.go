@@ -6,6 +6,8 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	"log"
+	"os"
+	"os/signal"
 )
 
 const (
@@ -54,8 +56,9 @@ func runServer(vp *viper.Viper) error {
 	)
 
 	s := cluster.New(vp.GetInt(keyID), vp.GetString(keyListenClient))
+	ctx, _ := signal.NotifyContext(context.Background(), os.Interrupt)
 	s.Start(
-		context.Background(),
+		ctx,
 		vp.GetString(keyListenPeer),
 		vp.GetStringSlice(keyInitialCluster),
 		vp.GetStringSlice(keyDiscovery),

@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"context"
+	"errors"
 	"go.etcd.io/etcd/client/pkg/v3/types"
 	"go.etcd.io/etcd/pkg/v3/wait"
 	"go.etcd.io/etcd/raft/v3"
@@ -36,6 +37,7 @@ type raftNode struct {
 	snapDir     string
 	getSnapshot func() ([]byte, error)
 
+	errorCh      chan<- error
 	proposeCh    <-chan []byte
 	confChangeCh <-chan raftpb.ConfChange
 	commitCh     chan<- *commit
@@ -56,7 +58,6 @@ type raftNode struct {
 
 	ctx    context.Context
 	cancel context.CancelFunc
-	wg     *sync.WaitGroup
 }
 
 var defaultSnapshotCount uint64 = 5
@@ -78,9 +79,10 @@ func newRaftNode(
 	w wait.Wait,
 	proposeCh <-chan []byte,
 	confChangeCh <-chan raftpb.ConfChange,
-) (<-chan *commit, <-chan *snap.Snapshotter, func()) {
+) (<-chan *commit, <-chan *snap.Snapshotter, <-chan error) {
 	commitCh := make(chan *commit)
-	snapshotReady := make(chan *snap.Snapshotter)
+	snapshotReady := make(chan *snap.Snapshotter, 1)
+	errorCh := make(chan error)
 
 	URL, err := url.Parse(peerURL)
 	if err != nil {
@@ -96,6 +98,7 @@ func newRaftNode(
 		snapDir:     snapDir,
 		getSnapshot: getSnapshot,
 
+		errorCh:      errorCh,
 		proposeCh:    proposeCh,
 		confChangeCh: confChangeCh,
 		commitCh:     commitCh,
@@ -103,13 +106,11 @@ func newRaftNode(
 
 		snapCount:     defaultSnapshotCount,
 		snapshotReady: snapshotReady,
-
-		wg: &sync.WaitGroup{},
 	}
 	rn.ctx, rn.cancel = context.WithCancel(ctx)
 
 	go rn.start(initialCluster, discovery)
-	return commitCh, snapshotReady, rn.stop
+	return commitCh, snapshotReady, errorCh
 }
 
 func (rn *raftNode) start(initialCluster, discovery []string) {
@@ -180,7 +181,6 @@ func (rn *raftNode) start(initialCluster, discovery []string) {
 		return true
 	})
 
-	rn.wg.Add(2)
 	go rn.serveRaftHttp()
 	go rn.serveChannels()
 }
@@ -226,8 +226,6 @@ func (rn *raftNode) replayWAL(s *raft.MemoryStorage) {
 }
 
 func (rn *raftNode) serveRaftHttp() {
-	defer rn.wg.Done()
-
 	ln, err := newKeepAliveListener(rn.ctx, rn.peerAddr)
 	if err != nil {
 		log.Fatalf("raftexample: Failed to listen rafthttp (%v)", err)
@@ -236,12 +234,15 @@ func (rn *raftNode) serveRaftHttp() {
 	mux := rn.transport.Handler().(*http.ServeMux)
 	mux.Handle(DiscoveryPrefix, rn.newDiscoveryHandler())
 	err = (&http.Server{Handler: mux}).Serve(ln)
-	log.Fatalf("failed to serve http: %v", err)
+	select {
+	case <-rn.ctx.Done():
+		log.Println("raftNode.serveRaftHttp canceled by ctx")
+	default:
+		log.Fatalf("failed to serve http: %v", err)
+	}
 }
 
 func (rn *raftNode) serveChannels() {
-	defer rn.wg.Done()
-
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 
@@ -284,6 +285,8 @@ func (rn *raftNode) serveChannels() {
 
 			applyDoneCh, ok := rn.publishEntries(rn.entriesToApply(rd.CommittedEntries))
 			if !ok {
+				log.Println("raftNode.serveChannels canceled by publishEntries error")
+				rn.writeErrorAndStop(errors.New("failed to publishEntries"))
 				return
 			}
 			rn.transport.Send(rn.processMessage(rd.Messages))
@@ -291,9 +294,13 @@ func (rn *raftNode) serveChannels() {
 			rn.maybeTriggerSnapshot(applyDoneCh)
 			rn.node.Advance()
 
-		case <-rn.transport.ErrorC:
+		case err := <-rn.transport.ErrorC:
+			log.Println("raftNode.serveChannels canceled by transport error")
+			rn.writeErrorAndStop(err)
 			return
 		case <-rn.ctx.Done():
+			log.Println("raftNode.serveChannels canceled by ctx")
+			rn.writeErrorAndStop(rn.ctx.Err())
 			return
 		}
 	}
@@ -449,12 +456,13 @@ func (rn *raftNode) saveSnap(snapshot raftpb.Snapshot) error {
 	return rn.wal.ReleaseLockTo(snapshot.Metadata.Index)
 }
 
-func (rn *raftNode) stop() {
-	rn.cancel()
-	rn.wg.Wait()
-
+func (rn *raftNode) writeErrorAndStop(err error) {
 	rn.transport.Stop()
+	rn.cancel()
+
 	close(rn.commitCh)
+	rn.errorCh <- err
+	close(rn.errorCh)
 	rn.node.Stop()
 }
 

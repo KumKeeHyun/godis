@@ -51,7 +51,7 @@ func (s *server) Start(ctx context.Context, peerURL string, initialCluster, disc
 
 	proposeCh := make(chan []byte)
 	confChangeCh := make(chan raftpb.ConfChange)
-	commitCh, snapshotterCh, stopRaftNode := newRaftNode(
+	commitCh, snapshotterCh, errorCh := newRaftNode(
 		s.ctx,
 		s.id,
 		peerURL,
@@ -75,9 +75,20 @@ func (s *server) Start(ctx context.Context, peerURL string, initialCluster, disc
 		w,
 		idGen,
 	)
-	s.serveClient()
+	go s.serveClient()
 
-	stopRaftNode()
+	select {
+	case <-s.ctx.Done():
+		log.Println("cluster server canceled by root context")
+		if err, ok := <-errorCh; ok {
+			log.Printf("raft error: %v", err)
+		}
+	case err, ok := <-errorCh:
+		if ok {
+			log.Printf("raft error: %v", err)
+		}
+	}
+	s.cancel()
 }
 
 func (s *server) serveClient() {
@@ -90,6 +101,7 @@ func (s *server) serveClient() {
 	for {
 		select {
 		case <-s.ctx.Done():
+			log.Println("stopped serve client")
 			break
 		default:
 		}
@@ -121,7 +133,7 @@ func (s *server) handleClientRequest(conn net.Conn) {
 		req, err := p.Parse()
 		if err != nil {
 			if errors.Is(err, io.EOF) {
-				log.Printf("close %s\n", raddr)
+				log.Printf("close handler %s\n", raddr)
 				break
 			}
 			log.Printf("failed to read request from %s: %v\n", raddr, err)
