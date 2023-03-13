@@ -2,7 +2,6 @@ package cluster
 
 import (
 	"context"
-	"errors"
 	"go.etcd.io/etcd/client/pkg/v3/types"
 	"go.etcd.io/etcd/pkg/v3/wait"
 	"go.etcd.io/etcd/raft/v3"
@@ -286,7 +285,7 @@ func (rn *raftNode) serveChannels() {
 			applyDoneCh, ok := rn.publishEntries(rn.entriesToApply(rd.CommittedEntries))
 			if !ok {
 				log.Println("raftNode.serveChannels canceled by publishEntries error")
-				rn.writeErrorAndStop(errors.New("failed to publishEntries"))
+				rn.writeErrorAndStop(nil)
 				return
 			}
 			rn.transport.Send(rn.processMessage(rd.Messages))
@@ -300,7 +299,7 @@ func (rn *raftNode) serveChannels() {
 			return
 		case <-rn.ctx.Done():
 			log.Println("raftNode.serveChannels canceled by ctx")
-			rn.writeErrorAndStop(rn.ctx.Err())
+			rn.writeErrorAndStop(nil)
 			return
 		}
 	}
