@@ -66,7 +66,6 @@ func newCluster(num int) *cluster {
 			i,
 			peer,
 			initialCluster,
-			nil,
 			false,
 			fmt.Sprintf("raft-test-%d", i),
 			fmt.Sprintf("raft-test-%d-snap", i),

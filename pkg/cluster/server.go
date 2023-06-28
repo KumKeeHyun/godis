@@ -42,7 +42,7 @@ func New(id int, clientURL string) *server {
 	}
 }
 
-func (s *server) Start(ctx context.Context, peerURL string, initialCluster, discovery []string, join bool, walDir, snapDir string) {
+func (s *server) Start(ctx context.Context, peerURL string, initialCluster []string, join bool, walDir, snapDir string) {
 	s.ctx, s.cancel = context.WithCancel(ctx)
 
 	w := wait.New()
@@ -56,7 +56,6 @@ func (s *server) Start(ctx context.Context, peerURL string, initialCluster, disc
 		s.id,
 		peerURL,
 		initialCluster,
-		discovery,
 		join,
 		walDir,
 		snapDir,

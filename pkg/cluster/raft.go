@@ -18,7 +18,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -30,7 +29,7 @@ type commit struct {
 type raftNode struct {
 	id          int
 	peerAddr    string
-	peers       *sync.Map
+	peers       map[int]string
 	join        bool
 	walDir      string
 	snapDir     string
@@ -70,7 +69,6 @@ func newRaftNode(
 	id int,
 	peerURL string,
 	initialCluster []string,
-	discovery []string,
 	join bool,
 	walDir string,
 	snapDir string,
@@ -91,7 +89,6 @@ func newRaftNode(
 	rn := &raftNode{
 		id:          id,
 		peerAddr:    URL.Host,
-		peers:       &sync.Map{},
 		join:        join,
 		walDir:      walDir,
 		snapDir:     snapDir,
@@ -108,17 +105,12 @@ func newRaftNode(
 	}
 	rn.ctx, rn.cancel = context.WithCancel(ctx)
 
-	go rn.start(initialCluster, discovery)
+	go rn.start(initialCluster)
 	return commitCh, snapshotReady, errorCh
 }
 
-func (rn *raftNode) start(initialCluster, discovery []string) {
+func (rn *raftNode) start(initialCluster []string) {
 	walExists := wal.Exist(rn.walDir)
-	if walExists || rn.join {
-		if len(discovery) == 0 {
-			log.Fatal("discovery must not be empty when restarting or joining")
-		}
-	}
 	rn.wal = rn.openWAL(rn.walDir)
 	rn.raftStorage = raft.NewMemoryStorage()
 	if walExists {
@@ -131,8 +123,9 @@ func (rn *raftNode) start(initialCluster, discovery []string) {
 		}
 	}
 	rn.snapshotter = snap.New(zap.NewExample(), rn.snapDir)
-
 	rn.snapshotReady <- rn.snapshotter
+
+	rn.initPeers(initialCluster)
 
 	cfg := &raft.Config{
 		ID:                        uint64(rn.id),
@@ -143,22 +136,15 @@ func (rn *raftNode) start(initialCluster, discovery []string) {
 		MaxInflightMsgs:           256,
 		MaxUncommittedEntriesSize: 1 << 30,
 	}
-
 	if walExists || rn.join {
 		// join
-		rn.discoverCluster(discovery)
-
 		rn.node = raft.RestartNode(cfg)
 	} else {
 		// init cluster
-		rn.initPeers(initialCluster)
-
-		rpeers := make([]raft.Peer, 0)
-		rn.peers.Range(func(pid, _ any) bool {
-			rpeers = append(rpeers, raft.Peer{ID: uint64(pid.(int))})
-			return true
-		})
-		log.Printf("start with peers %v", rpeers)
+		rpeers := make([]raft.Peer, 0, len(initialCluster))
+		for peerID := range rn.peers {
+			rpeers = append(rpeers, raft.Peer{ID: uint64(peerID)})
+		}
 
 		rn.node = raft.StartNode(cfg, rpeers)
 	}
@@ -173,25 +159,27 @@ func (rn *raftNode) start(initialCluster, discovery []string) {
 		ErrorC:      make(chan error),
 	}
 	rn.transport.Start()
-	rn.peers.Range(func(pid, purl any) bool {
-		if pid.(int) != rn.id {
-			rn.transport.AddPeer(types.ID(pid.(int)), []string{purl.(string)})
+	for peerID, peerHost := range rn.peers {
+		if peerID != rn.id {
+			rn.transport.AddPeer(types.ID(peerID), []string{peerHost})
 		}
-		return true
-	})
+	}
 
 	go rn.serveRaftHttp()
 	go rn.serveChannels()
 }
 
 func (rn *raftNode) initPeers(initialCluster []string) {
+	rn.peers = map[int]string{}
+
 	for _, peer := range initialCluster {
-		idAndURL := strings.Split(peer, "@")
-		pid, err := strconv.Atoi(idAndURL[0])
+		idAndUrl := strings.Split(peer, "@")
+		peerID, err := strconv.Atoi(idAndUrl[0])
 		if err != nil {
 			log.Fatalf("invalid peer format %v", peer)
 		}
-		rn.peers.Store(pid, idAndURL[1])
+		peerUrl := idAndUrl[1]
+		rn.peers[peerID] = peerUrl
 	}
 }
 
@@ -230,9 +218,7 @@ func (rn *raftNode) serveRaftHttp() {
 		log.Fatalf("raftexample: Failed to listen rafthttp (%v)", err)
 	}
 
-	mux := rn.transport.Handler().(*http.ServeMux)
-	mux.Handle(DiscoveryPrefix, rn.newDiscoveryHandler())
-	err = (&http.Server{Handler: mux}).Serve(ln)
+	err = (&http.Server{Handler: rn.transport.Handler()}).Serve(ln)
 	select {
 	case <-rn.ctx.Done():
 		log.Println("raftNode.serveRaftHttp canceled by ctx")
@@ -352,19 +338,19 @@ func (rn *raftNode) publishEntries(ents []raftpb.Entry) (<-chan struct{}, bool) 
 			rn.confState = *rn.node.ApplyConfChange(cc)
 			switch cc.Type {
 			case raftpb.ConfChangeAddNode:
-				if len(cc.Context) > 0 {
+				if len(cc.Context) > 0 && cc.NodeID != uint64(rn.id) {
 					log.Printf("transport add peer %d@%s", cc.NodeID, string(cc.Context))
 					rn.transport.AddPeer(types.ID(cc.NodeID), []string{string(cc.Context)})
-					rn.peers.Store(int(cc.NodeID), string(cc.Context))
+					rn.peers[int(cc.NodeID)] = string(cc.Context)
 				}
 			case raftpb.ConfChangeRemoveNode:
 				if cc.NodeID == uint64(rn.id) {
 					log.Println("I've been removed from the cluster! Shutting down.")
 					return nil, false
 				}
-				log.Printf("transport remove peer %d@%s", cc.NodeID, string(cc.Context))
+				log.Printf("transport remove peer %d", cc.NodeID)
 				rn.transport.RemovePeer(types.ID(cc.NodeID))
-				rn.peers.Delete(int(cc.NodeID))
+				delete(rn.peers, int(cc.NodeID))
 			}
 			rn.w.Trigger(cc.ID, nil)
 		}
@@ -375,7 +361,7 @@ func (rn *raftNode) publishEntries(ents []raftpb.Entry) (<-chan struct{}, bool) 
 	if len(cents) > 0 {
 		applyDoneCh = make(chan struct{}, 1)
 		select {
-		case rn.commitCh <- &commit{cents, applyDoneCh}:
+		case rn.commitCh <- &commit{ents: cents, applyDoneC: applyDoneCh}:
 		case <-rn.ctx.Done():
 			return nil, false
 		}
@@ -414,17 +400,18 @@ func (rn *raftNode) maybeTriggerSnapshot(applyDoneCh <-chan struct{}) {
 		}
 	}
 
-	log.Printf("start snapshot [applied index: %d | last snapshot index: %d]", rn.appliedIndex, rn.snapshotIndex)
-	data, err := rn.getSnapshot()
+	log.Printf("trigger snapshot [applied index: %d | last snapshot index: %d]", rn.appliedIndex, rn.snapshotIndex)
+
+	storeData, err := rn.getSnapshot()
 	if err != nil {
-		log.Panic(err)
+		log.Fatal(err)
 	}
-	snapshot, err := rn.raftStorage.CreateSnapshot(rn.appliedIndex, &rn.confState, data)
+	snapshot, err := rn.raftStorage.CreateSnapshot(rn.appliedIndex, &rn.confState, storeData)
 	if err != nil {
-		log.Panic(err)
+		log.Fatal(err)
 	}
 	if err := rn.saveSnap(snapshot); err != nil {
-		log.Panic(err)
+		log.Fatal(err)
 	}
 
 	// slow follower 를 위해 10K 정도는 남겨둠
@@ -433,7 +420,7 @@ func (rn *raftNode) maybeTriggerSnapshot(applyDoneCh <-chan struct{}) {
 		compactIndex = rn.appliedIndex - defaultSnapshotCatchUpEntries
 	}
 	if err := rn.raftStorage.Compact(compactIndex); err != nil {
-		log.Panic(err)
+		log.Fatal(err)
 	}
 
 	log.Printf("compacted log at index %d", compactIndex)

@@ -7,6 +7,7 @@ require (
 	github.com/spf13/viper v1.15.0
 	github.com/stretchr/testify v1.8.1
 	go.etcd.io/etcd/client/pkg/v3 v3.5.7
+	go.etcd.io/etcd/pkg/v3 v3.5.7
 	go.etcd.io/etcd/raft/v3 v3.5.7
 	go.etcd.io/etcd/server/v3 v3.5.7
 	go.uber.org/zap v1.21.0
@@ -39,7 +40,6 @@ require (
 	github.com/subosito/gotenv v1.4.2 // indirect
 	github.com/xiang90/probing v0.0.0-20190116061207-43a291ad63a2 // indirect
 	go.etcd.io/etcd/api/v3 v3.5.7 // indirect
-	go.etcd.io/etcd/pkg/v3 v3.5.7 // indirect
 	go.uber.org/atomic v1.9.0 // indirect
 	go.uber.org/multierr v1.8.0 // indirect
 	golang.org/x/sys v0.3.0 // indirect

@@ -15,7 +15,6 @@ const (
 	keyListenClient   = "listen-client"
 	keyListenPeer     = "listen-peer"
 	keyInitialCluster = "initial-cluster"
-	keyDiscovery      = "discovery"
 	keyJoin           = "join"
 	keyWalDir         = "waldir"
 	keySnapDir        = "snapdir"
@@ -34,7 +33,6 @@ func New(vp *viper.Viper) *cobra.Command {
 	flags.String(keyListenClient, "http://0.0.0.0:6379", "url for listening client request")
 	flags.String(keyListenPeer, "http://0.0.0.0:6300", "url for listening peer request")
 	flags.StringSlice(keyInitialCluster, []string{"1@http://127.0.0.1:6300"}, "(id,url) pairs seperated by '@' that initialized cluster")
-	flags.StringSlice(keyDiscovery, []string{}, "subset of cluster for discover peers")
 	flags.Bool(keyJoin, false, "join")
 	flags.String(keyWalDir, "", "location of wal")
 	flags.String(keySnapDir, "", "location of snapshot")
@@ -46,12 +44,11 @@ func New(vp *viper.Viper) *cobra.Command {
 
 func runServer(vp *viper.Viper) error {
 	log.Printf(
-		"start server in id(%d) listenClient(%s) listenPeer(%s) initialCluster(%v) discovery(%v) join(%v)\n",
+		"start server in id(%d) listenClient(%s) listenPeer(%s) initialCluster(%v) join(%v)\n",
 		vp.GetInt(keyID),
 		vp.GetString(keyListenClient),
 		vp.GetString(keyListenPeer),
 		vp.GetStringSlice(keyInitialCluster),
-		vp.GetStringSlice(keyDiscovery),
 		vp.GetBool(keyJoin),
 	)
 
@@ -61,7 +58,6 @@ func runServer(vp *viper.Viper) error {
 		ctx,
 		vp.GetString(keyListenPeer),
 		vp.GetStringSlice(keyInitialCluster),
-		vp.GetStringSlice(keyDiscovery),
 		vp.GetBool(keyJoin),
 		vp.GetString(keyWalDir),
 		vp.GetString(keySnapDir),
