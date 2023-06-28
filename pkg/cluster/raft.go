@@ -159,9 +159,9 @@ func (rn *raftNode) start(initialCluster []string) {
 		ErrorC:      make(chan error),
 	}
 	rn.transport.Start()
-	for peerID, peerHost := range rn.peers {
+	for peerID, peerUrl := range rn.peers {
 		if peerID != rn.id {
-			rn.transport.AddPeer(types.ID(peerID), []string{peerHost})
+			rn.transport.AddPeer(types.ID(peerID), []string{peerUrl})
 		}
 	}
 
