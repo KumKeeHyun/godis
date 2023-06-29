@@ -1,0 +1,7 @@
+apiVersion: kumkeehyun.github.com/v1
+kind: Godis
+metadata:
+  name: example-godis
+spec:
+  name: example-godis
+  replicas: 1
