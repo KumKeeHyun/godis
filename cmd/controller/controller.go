@@ -73,7 +73,7 @@ func runController(vp *viper.Viper) error {
 	kubeInformerFactory.Start(ctx.Done())
 	godisInformerFactory.Start(ctx.Done())
 
-	if err = godisController.Run(ctx, 2); err != nil {
+	if err = godisController.Run(ctx, 1); err != nil {
 		logger.Error(err, "Error running controller")
 		klog.FlushAndExit(klog.ExitFlushTimeout, 1)
 		return err

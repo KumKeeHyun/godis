@@ -17,9 +17,36 @@ spec:
               type: object
               properties:
                 name:
-                  type: "string"
+                  type: string
                 replicas:
-                  type: "integer"
+                  type: integer
+                  minimum: 1
+                  maximum: 9
+            status:
+              type: object
+              properties:
+                replicas:
+                  type: integer
+                members:
+                  type: string
+      subresources:
+        status: { }
+      additionalPrinterColumns:
+        - name: SpecReplicas
+          type: integer
+          description: The replicas spec
+          jsonPath: .spec.replicas
+        - name: StatusReplicas
+          type: integer
+          description: The replicas status
+          jsonPath: .status.replicas
+        - name: StatusMembers
+          type: string
+          description: The members of godis cluster
+          jsonPath: .status.members
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
   names:
     kind: Godis
     singular: godis

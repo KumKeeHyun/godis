@@ -20,7 +20,8 @@ type GodisSpec struct {
 }
 
 type GodisStatus struct {
-	Replicas int32 `json:"replicas"`
+	Replicas int32  `json:"replicas"`
+	Members  string `json:"members"`
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object

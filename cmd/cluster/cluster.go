@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 )
 
 const (
@@ -32,7 +33,7 @@ func New(vp *viper.Viper) *cobra.Command {
 	flags.Int(keyID, 1, "node id")
 	flags.String(keyListenClient, "http://0.0.0.0:6379", "url for listening client request")
 	flags.String(keyListenPeer, "http://0.0.0.0:6300", "url for listening peer request")
-	flags.StringSlice(keyInitialCluster, []string{"1@http://127.0.0.1:6300"}, "(id,url) pairs seperated by '@' that initialized cluster")
+	flags.String(keyInitialCluster, "1@http://127.0.0.1:6300", "id1@url1,id2@url2...")
 	flags.Bool(keyJoin, false, "join")
 	flags.String(keyWalDir, "", "location of wal")
 	flags.String(keySnapDir, "", "location of snapshot")
@@ -54,14 +55,15 @@ func runServer(vp *viper.Viper) error {
 
 	s := cluster.New(vp.GetInt(keyID), vp.GetString(keyListenClient))
 	ctx, _ := signal.NotifyContext(context.Background(), os.Interrupt)
-	s.Start(
-		ctx,
-		vp.GetString(keyListenPeer),
-		vp.GetStringSlice(keyInitialCluster),
-		vp.GetBool(keyJoin),
-		vp.GetString(keyWalDir),
-		vp.GetString(keySnapDir),
-	)
+	s.
+		Start(
+			ctx,
+			vp.GetString(keyListenPeer),
+			strings.Split(vp.GetString(keyInitialCluster), ","),
+			vp.GetBool(keyJoin),
+			vp.GetString(keyWalDir),
+			vp.GetString(keySnapDir),
+		)
 
 	return nil
 }
