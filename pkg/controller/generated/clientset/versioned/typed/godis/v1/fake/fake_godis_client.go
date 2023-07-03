@@ -28,6 +28,10 @@ type FakeKumkeehyunV1 struct {
 	*testing.Fake
 }
 
+func (c *FakeKumkeehyunV1) Godises(namespace string) v1.GodisInterface {
+	return &FakeGodises{c, namespace}
+}
+
 func (c *FakeKumkeehyunV1) GodisClusters(namespace string) v1.GodisClusterInterface {
 	return &FakeGodisClusters{c, namespace}
 }
