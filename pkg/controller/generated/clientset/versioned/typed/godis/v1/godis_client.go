@@ -28,7 +28,7 @@ import (
 
 type KumkeehyunV1Interface interface {
 	RESTClient() rest.Interface
-	GodisesGetter
+	GodisClustersGetter
 }
 
 // KumkeehyunV1Client is used to interact with features provided by the kumkeehyun.github.com group.
@@ -36,8 +36,8 @@ type KumkeehyunV1Client struct {
 	restClient rest.Interface
 }
 
-func (c *KumkeehyunV1Client) Godises(namespace string) GodisInterface {
-	return newGodises(c, namespace)
+func (c *KumkeehyunV1Client) GodisClusters(namespace string) GodisClusterInterface {
+	return newGodisClusters(c, namespace)
 }
 
 // NewForConfig creates a new KumkeehyunV1Client for the given config.

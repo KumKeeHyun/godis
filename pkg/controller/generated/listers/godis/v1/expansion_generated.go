@@ -18,10 +18,10 @@ limitations under the License.
 
 package v1
 
-// GodisListerExpansion allows custom methods to be added to
-// GodisLister.
-type GodisListerExpansion interface{}
+// GodisClusterListerExpansion allows custom methods to be added to
+// GodisClusterLister.
+type GodisClusterListerExpansion interface{}
 
-// GodisNamespaceListerExpansion allows custom methods to be added to
-// GodisNamespaceLister.
-type GodisNamespaceListerExpansion interface{}
+// GodisClusterNamespaceListerExpansion allows custom methods to be added to
+// GodisClusterNamespaceLister.
+type GodisClusterNamespaceListerExpansion interface{}

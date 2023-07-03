@@ -24,8 +24,8 @@ import (
 
 // Interface provides access to all the informers in this group version.
 type Interface interface {
-	// Godises returns a GodisInformer.
-	Godises() GodisInformer
+	// GodisClusters returns a GodisClusterInformer.
+	GodisClusters() GodisClusterInformer
 }
 
 type version struct {
@@ -39,7 +39,7 @@ func New(f internalinterfaces.SharedInformerFactory, namespace string, tweakList
 	return &version{factory: f, namespace: namespace, tweakListOptions: tweakListOptions}
 }
 
-// Godises returns a GodisInformer.
-func (v *version) Godises() GodisInformer {
-	return &godisInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
+// GodisClusters returns a GodisClusterInformer.
+func (v *version) GodisClusters() GodisClusterInformer {
+	return &godisClusterInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
 }

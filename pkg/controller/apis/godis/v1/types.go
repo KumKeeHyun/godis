@@ -7,6 +7,33 @@ import (
 // +genclient
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
+type GodisCluster struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+
+	Spec   GodisClusterSpec   `json:"spec"`
+	Status GodisClusterStatus `json:"status"`
+}
+
+type GodisClusterSpec struct {
+	Replicas *int32 `json:"replicas"`
+}
+
+type GodisClusterStatus struct {
+	Replicas int32 `json:"replicas"`
+}
+
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+
+type GodisClusterList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `son:"metadata,omitempty"`
+
+	Items []*GodisCluster `json:"items"`
+}
+
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+
 type Godis struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -16,12 +43,11 @@ type Godis struct {
 }
 
 type GodisSpec struct {
-	Replicas *int32 `json:"replicas"`
+	Preferred bool `json:"initial"`
 }
 
 type GodisStatus struct {
-	Replicas int32  `json:"replicas"`
-	Members  string `json:"members"`
+	State string `json:"state"`
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object

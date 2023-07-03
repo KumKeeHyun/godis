@@ -32,59 +32,59 @@ import (
 	cache "k8s.io/client-go/tools/cache"
 )
 
-// GodisInformer provides access to a shared informer and lister for
-// Godises.
-type GodisInformer interface {
+// GodisClusterInformer provides access to a shared informer and lister for
+// GodisClusters.
+type GodisClusterInformer interface {
 	Informer() cache.SharedIndexInformer
-	Lister() v1.GodisLister
+	Lister() v1.GodisClusterLister
 }
 
-type godisInformer struct {
+type godisClusterInformer struct {
 	factory          internalinterfaces.SharedInformerFactory
 	tweakListOptions internalinterfaces.TweakListOptionsFunc
 	namespace        string
 }
 
-// NewGodisInformer constructs a new informer for Godis type.
+// NewGodisClusterInformer constructs a new informer for GodisCluster type.
 // Always prefer using an informer factory to get a shared informer instead of getting an independent
 // one. This reduces memory footprint and number of connections to the server.
-func NewGodisInformer(client versioned.Interface, namespace string, resyncPeriod time.Duration, indexers cache.Indexers) cache.SharedIndexInformer {
-	return NewFilteredGodisInformer(client, namespace, resyncPeriod, indexers, nil)
+func NewGodisClusterInformer(client versioned.Interface, namespace string, resyncPeriod time.Duration, indexers cache.Indexers) cache.SharedIndexInformer {
+	return NewFilteredGodisClusterInformer(client, namespace, resyncPeriod, indexers, nil)
 }
 
-// NewFilteredGodisInformer constructs a new informer for Godis type.
+// NewFilteredGodisClusterInformer constructs a new informer for GodisCluster type.
 // Always prefer using an informer factory to get a shared informer instead of getting an independent
 // one. This reduces memory footprint and number of connections to the server.
-func NewFilteredGodisInformer(client versioned.Interface, namespace string, resyncPeriod time.Duration, indexers cache.Indexers, tweakListOptions internalinterfaces.TweakListOptionsFunc) cache.SharedIndexInformer {
+func NewFilteredGodisClusterInformer(client versioned.Interface, namespace string, resyncPeriod time.Duration, indexers cache.Indexers, tweakListOptions internalinterfaces.TweakListOptionsFunc) cache.SharedIndexInformer {
 	return cache.NewSharedIndexInformer(
 		&cache.ListWatch{
 			ListFunc: func(options metav1.ListOptions) (runtime.Object, error) {
 				if tweakListOptions != nil {
 					tweakListOptions(&options)
 				}
-				return client.KumkeehyunV1().Godises(namespace).List(context.TODO(), options)
+				return client.KumkeehyunV1().GodisClusters(namespace).List(context.TODO(), options)
 			},
 			WatchFunc: func(options metav1.ListOptions) (watch.Interface, error) {
 				if tweakListOptions != nil {
 					tweakListOptions(&options)
 				}
-				return client.KumkeehyunV1().Godises(namespace).Watch(context.TODO(), options)
+				return client.KumkeehyunV1().GodisClusters(namespace).Watch(context.TODO(), options)
 			},
 		},
-		&godisv1.Godis{},
+		&godisv1.GodisCluster{},
 		resyncPeriod,
 		indexers,
 	)
 }
 
-func (f *godisInformer) defaultInformer(client versioned.Interface, resyncPeriod time.Duration) cache.SharedIndexInformer {
-	return NewFilteredGodisInformer(client, f.namespace, resyncPeriod, cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc}, f.tweakListOptions)
+func (f *godisClusterInformer) defaultInformer(client versioned.Interface, resyncPeriod time.Duration) cache.SharedIndexInformer {
+	return NewFilteredGodisClusterInformer(client, f.namespace, resyncPeriod, cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc}, f.tweakListOptions)
 }
 
-func (f *godisInformer) Informer() cache.SharedIndexInformer {
-	return f.factory.InformerFor(&godisv1.Godis{}, f.defaultInformer)
+func (f *godisClusterInformer) Informer() cache.SharedIndexInformer {
+	return f.factory.InformerFor(&godisv1.GodisCluster{}, f.defaultInformer)
 }
 
-func (f *godisInformer) Lister() v1.GodisLister {
-	return v1.NewGodisLister(f.Informer().GetIndexer())
+func (f *godisClusterInformer) Lister() v1.GodisClusterLister {
+	return v1.NewGodisClusterLister(f.Informer().GetIndexer())
 }
