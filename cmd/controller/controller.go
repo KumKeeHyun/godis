@@ -65,6 +65,7 @@ func runController(vp *viper.Viper) error {
 
 	godisController := controller.New(ctx, kubeClient, godisClient,
 		kubeInformerFactory.Core().V1().Pods(),
+		godisInformerFactory.Kumkeehyun().V1().GodisClusters(),
 		godisInformerFactory.Kumkeehyun().V1().Godises(),
 	)
 

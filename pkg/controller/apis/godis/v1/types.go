@@ -44,7 +44,7 @@ type Godis struct {
 }
 
 type GodisSpec struct {
-	Preferred bool `json:"initial"`
+	Preferred bool `json:"preferred"`
 }
 
 type GodisStatus struct {
