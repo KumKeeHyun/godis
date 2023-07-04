@@ -165,7 +165,7 @@ func (c *Controller) Run(ctx context.Context, workers int) error {
 	// Launch two workers to process Godis resources
 	for i := 0; i < workers; i++ {
 		go wait.UntilWithContext(ctx, c.runClusterWorker, time.Second)
-		//go wait.UntilWithContext(ctx, c.runGodisWorker, time.Second)
+		go wait.UntilWithContext(ctx, c.runGodisWorker, time.Second)
 	}
 
 	logger.Info("Started workers")
@@ -174,93 +174,3 @@ func (c *Controller) Run(ctx context.Context, workers int) error {
 
 	return nil
 }
-
-//
-//func newPod(godis *godisapis.Godis, id int, initialCluster string, join bool) *corev1.Pod {
-//	podLabels := map[string]string{
-//		"cluster-name": godis.Name,
-//		"id":           strconv.Itoa(id),
-//	}
-//	podName := godisPodName(godis, id)
-//
-//	return &corev1.Pod{
-//		ObjectMeta: metav1.ObjectMeta{
-//			Name:      podName,
-//			Namespace: godis.Namespace,
-//			Labels:    podLabels,
-//			OwnerReferences: []metav1.OwnerReference{
-//				*metav1.NewControllerRef(godis, godisapis.SchemeGroupVersion.WithKind("Godis")),
-//			},
-//		},
-//		Spec: corev1.PodSpec{
-//			Hostname:  podName,
-//			Subdomain: godis.Name,
-//			Containers: []corev1.Container{
-//				{
-//					Name:  "godis",
-//					Image: "kbzjung359/godis",
-//					Args:  []string{"cluster"},
-//					Env: []corev1.EnvVar{
-//						{
-//							Name:  "CLUSTER_ID",
-//							Value: fmt.Sprintf("%d", id),
-//						},
-//						{
-//							Name:  "CLUSTER_INITIAL-CLUSTER",
-//							Value: initialCluster,
-//						},
-//						{
-//							Name:  "CLUSTER_WALDIR",
-//							Value: "/tmp/godis/wal",
-//						},
-//						{
-//							Name:  "CLUSTER_SNAPDIR",
-//							Value: "/tmp/godis/snap",
-//						},
-//						{
-//							Name:  "CLUSTER_JOIN",
-//							Value: strconv.FormatBool(join),
-//						},
-//					},
-//				},
-//			},
-//		},
-//	}
-//}
-//
-//func godisPodName(godis *godisapis.Godis, id int) string {
-//	return fmt.Sprintf("%s-%d", godis.Name, id)
-//}
-//
-//func newService(pod *corev1.Pod) *corev1.Service {
-//	return &corev1.Service{
-//		ObjectMeta: metav1.ObjectMeta{
-//			Name:            pod.Name + "-endpoint",
-//			Namespace:       pod.Namespace,
-//			OwnerReferences: pod.OwnerReferences,
-//		},
-//		Spec: corev1.ServiceSpec{
-//			Ports: []corev1.ServicePort{
-//				{
-//					Name: "client",
-//					Port: 6379,
-//					TargetPort: intstr.IntOrString{
-//						Type:   intstr.Int,
-//						IntVal: 6379,
-//					},
-//				},
-//				{
-//					Name: "peer",
-//					Port: 6300,
-//					TargetPort: intstr.IntOrString{
-//						Type:   intstr.Int,
-//						IntVal: 6300,
-//					},
-//				},
-//			},
-//			Selector: pod.Labels,
-//			Type:     corev1.ServiceTypeClusterIP,
-//		},
-//	}
-//}
-//
