@@ -8,11 +8,9 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
-	coreinformers "k8s.io/client-go/informers/core/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
 	typedcorev1 "k8s.io/client-go/kubernetes/typed/core/v1"
-	corelisters "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/workqueue"
@@ -30,8 +28,6 @@ type Controller struct {
 	kubeClient  kubernetes.Interface
 	godisClient godisclientset.Interface
 
-	podsLister    corelisters.PodLister
-	podsSynced    cache.InformerSynced
 	clusterLister godislisters.GodisClusterLister
 	clusterSynced cache.InformerSynced
 	godisLister   godislisters.GodisLister
@@ -46,7 +42,6 @@ func New(
 	ctx context.Context,
 	kubeClient kubernetes.Interface,
 	godisClient godisclientset.Interface,
-	podInformer coreinformers.PodInformer,
 	clusterInformer godisinformers.GodisClusterInformer,
 	godisInformer godisinformers.GodisInformer) *Controller {
 	logger := klog.FromContext(ctx)
@@ -71,8 +66,6 @@ func New(
 		kubeClient:  kubeClient,
 		godisClient: godisClient,
 
-		podsLister:    podInformer.Lister(),
-		podsSynced:    podInformer.Informer().HasSynced,
 		clusterLister: clusterInformer.Lister(),
 		clusterSynced: clusterInformer.Informer().HasSynced,
 		godisLister:   godisInformer.Lister(),
@@ -102,21 +95,6 @@ func New(
 			DeleteFunc: controller.enqueueGodisEvent,
 		},
 	)
-	//podInformer.Informer().AddEventHandler(
-	//	cache.ResourceEventHandlerFuncs{
-	//		AddFunc: controller.handleObject,
-	//		UpdateFunc: func(oldObj, newObj interface{}) {
-	//			newPod := newObj.(*corev1.Pod)
-	//			oldPod := oldObj.(*corev1.Pod)
-	//			if newPod.ResourceVersion == oldPod.ResourceVersion {
-	//				// Periodic resync will send update events for all known Deployments.
-	//				// Two different versions of the same Deployment will always have different RVs.
-	//				return
-	//			}
-	//			controller.handleObject(newObj)
-	//		},
-	//		DeleteFunc: controller.handleObject,
-	//	})
 
 	return controller
 }
@@ -157,7 +135,7 @@ func (c *Controller) Run(ctx context.Context, workers int) error {
 	// Wait for the caches to be synced before starting workers
 	logger.Info("Waiting for informer caches to sync")
 
-	if ok := cache.WaitForCacheSync(ctx.Done(), c.podsSynced, c.clusterSynced, c.godisSynced); !ok {
+	if ok := cache.WaitForCacheSync(ctx.Done(), c.clusterSynced, c.godisSynced); !ok {
 		return fmt.Errorf("failed to wait for caches to sync")
 	}
 
