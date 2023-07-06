@@ -20,7 +20,11 @@ type GodisClusterSpec struct {
 }
 
 type GodisClusterStatus struct {
-	Replicas int32 `json:"replicas"`
+	Replicas        int32  `json:"replicas"`
+	Status          string `json:"status"`
+	InitialReplicas *int   `json:"initialReplicas"`
+	ScaleOutID      *int   `json:"scaleOutID"`
+	ScaleInID       *int   `json:"scaleInID"`
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object

@@ -3,9 +3,12 @@ package controller
 import (
 	"context"
 	"fmt"
+	"github.com/KumKeeHyun/godis/pkg/client"
+	resp "github.com/KumKeeHyun/godis/pkg/resp/v2"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/selection"
+	"net"
 	"strconv"
 	"strings"
 
@@ -85,118 +88,158 @@ func (c *Controller) clusterSyncHandler(ctx context.Context, key string) error {
 	if err != nil {
 		if errors.IsNotFound(err) {
 			utilruntime.HandleError(fmt.Errorf("godis cluster '%s' in work queue no longer exists", key))
-			// delete
-			// TODO delete logic
 			return nil
 		}
 		return err
 	}
 
-	logger.Info("detect cluster event", "name", cluster.Name, "replicas", *cluster.Spec.Replicas)
+	clusterConfig, err := c.kubeClient.CoreV1().ConfigMaps(namespace).Get(ctx, configMapName(cluster), metav1.GetOptions{})
+	if errors.IsNotFound(err) || cluster.Status.Status == "Initializing" {
+		logger.Info("initialize new cluster", "name", cluster.Name)
+		cluster, clusterConfig, err = c.initializeCluster(cluster, clusterConfig)
 
-	initialize := false
-	configName := configMapName(cluster)
-	clusterConfig, err := c.kubeClient.CoreV1().ConfigMaps(namespace).Get(ctx, configName, metav1.GetOptions{})
-	if err != nil {
-		if !errors.IsNotFound(err) {
-			utilruntime.HandleError(fmt.Errorf("error get cluster configMap '%s'", configName))
-			return err
-		}
-
-		logger.Info("create new godis cluster config", "name", configName)
-		initialize = true
-
-		clusterConfig = newConfigMap(cluster)
-		clusterConfig.Data["initial-cluster"] = clusterPeers(cluster, int(*cluster.Spec.Replicas))
-		_, err = c.kubeClient.CoreV1().ConfigMaps(namespace).Create(ctx, clusterConfig, metav1.CreateOptions{})
 		if err != nil {
-			utilruntime.HandleError(fmt.Errorf("error create cluster configMap '%s'", configName))
 			return err
 		}
-	}
-
-	selector := clusterSelector(cluster)
-	godises, err := c.godisClient.KumkeehyunV1().Godises(namespace).List(ctx, metav1.ListOptions{LabelSelector: selector.String()})
-	if err != nil {
-		utilruntime.HandleError(fmt.Errorf("error list godises with selector '%s'", selector.String()))
-		return err
-	}
-
-	// TODO: initialize 조건 다시 구해야 함, 생성 도중 실패했을 때 다음 작업에서 초기화인지 스케일아웃인지 구분해야 함
-	if initialize {
-		for id := 1; id <= int(*cluster.Spec.Replicas); id++ {
-			_, err = c.godisClient.KumkeehyunV1().Godises(namespace).Create(ctx, newGodis(cluster, id, true), metav1.CreateOptions{})
-			if err != nil {
-				utilruntime.HandleError(fmt.Errorf("error create godis '%s'", godisName(cluster, id)))
-				return err
-			}
-		}
-
-		err = c.updateClusterStatus(cluster, int(*cluster.Spec.Replicas))
-		if err != nil {
-			utilruntime.HandleError(fmt.Errorf("error update godis cluster status '%s'", cluster.Name))
-			return err
+		if cluster.Spec.Replicas != nil && *cluster.Spec.Replicas != cluster.Status.Replicas {
+			// for requeuing
+			return fmt.Errorf("remain events")
 		}
 		return nil
 	}
 
-	// TODO: scale out/in 조건 다시 구해야 함
-	if int(*cluster.Spec.Replicas) > len(godises.Items) {
-		// scale out
-		newID := len(godises.Items) + 1
-		configCopy := clusterConfig.DeepCopy()
-		configCopy.Data["initial-cluster"] = clusterPeers(cluster, len(godises.Items)+1)
-		_, err = c.kubeClient.CoreV1().ConfigMaps(namespace).Update(ctx, configCopy, metav1.UpdateOptions{})
-		if err != nil {
-			utilruntime.HandleError(fmt.Errorf("error update cluster configMap '%s'", configName))
-			return err
-		}
+	godisList, err := c.godisClient.KumkeehyunV1().Godises(namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: godisSelector(cluster).String(),
+	})
+	if err != nil {
+		return err
+	}
 
-		_, err = c.godisClient.KumkeehyunV1().Godises(namespace).Create(ctx, newGodis(cluster, newID, false), metav1.CreateOptions{})
-		if err != nil {
-			utilruntime.HandleError(fmt.Errorf("error create godis '%s'", godisName(cluster, newID)))
-			return err
-		}
-
-		err = c.updateClusterStatus(cluster, len(godises.Items)+1)
-		if err != nil {
-			utilruntime.HandleError(fmt.Errorf("error update godis cluster status '%s'", cluster.Name))
-			return err
-		}
-
-		return fmt.Errorf("scale out step by step. new: %d", newID)
-	} else if int(*cluster.Spec.Replicas) < len(godises.Items) {
-		// scale in
-		deletedID := len(godises.Items)
-		err = c.godisClient.KumkeehyunV1().Godises(namespace).Delete(ctx, godisName(cluster, deletedID), metav1.DeleteOptions{})
-		if err != nil {
-			utilruntime.HandleError(fmt.Errorf("error delete godis '%s'", godisName(cluster, deletedID)))
-			return err
-		}
-
-		err = c.updateClusterStatus(cluster, len(godises.Items)-1)
-		if err != nil {
-			utilruntime.HandleError(fmt.Errorf("error update godis cluster status '%s'", cluster.Name))
-			return err
-		}
-
-		return fmt.Errorf("scale in step by step. delete: %d", deletedID)
+	if requiresScaleOut(cluster, godisList) {
+		logger.Info("scale out cluster", "name", cluster.Name)
+		err = c.ScaleOutCluster(cluster, clusterConfig, godisList)
+	} else if requiresScaleIn(cluster, godisList) {
+		logger.Info("scale in cluster", "name", cluster.Name)
+		err = c.ScaleInCluster(cluster, clusterConfig, godisList)
+	}
+	if err != nil {
+		return err
 	}
 
 	return nil
 }
 
-func clusterSelector(cluster *godisapis.GodisCluster) labels.Selector {
-	clusterReq, _ := labels.NewRequirement("cluster-name", selection.Equals, []string{cluster.Name})
-	return labels.NewSelector().Add(*clusterReq)
+func (c *Controller) initializeCluster(cluster *godisapis.GodisCluster, clusterConfig *corev1.ConfigMap) (*godisapis.GodisCluster, *corev1.ConfigMap, error) {
+	var err error
+	namespace := cluster.Namespace
+
+	// update status to initializing
+	if cluster.Status.Status != "Initializing" {
+		clusterCopy := cluster.DeepCopy()
+		clusterCopy.Status.Status = "Initializing"
+		initialReplicas := int(*cluster.Spec.Replicas)
+		clusterCopy.Status.InitialReplicas = &initialReplicas
+		cluster, err = c.godisClient.KumkeehyunV1().GodisClusters(namespace).UpdateStatus(context.TODO(), clusterCopy, metav1.UpdateOptions{})
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+
+	// create new configMap
+	clusterConfig, err = c.kubeClient.CoreV1().ConfigMaps(namespace).Create(context.TODO(), newConfigMapForInit(cluster, *cluster.Status.InitialReplicas), metav1.CreateOptions{})
+	if err != nil && !errors.IsAlreadyExists(err) {
+		return nil, nil, err
+	}
+
+	// create godises
+	for id := 1; id <= *cluster.Status.InitialReplicas; id++ {
+		_, err = c.godisClient.KumkeehyunV1().Godises(namespace).Get(context.TODO(), godisName(cluster, id), metav1.GetOptions{})
+		if errors.IsNotFound(err) {
+			_, err = c.godisClient.KumkeehyunV1().Godises(namespace).Create(context.TODO(), newGodis(cluster, id, true), metav1.CreateOptions{})
+		}
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+
+	// update status to running
+	clusterCopy := cluster.DeepCopy()
+	clusterCopy.Status.Status = "Running"
+	clusterCopy.Status.Replicas = int32(*cluster.Status.InitialReplicas)
+	clusterCopy.Status.InitialReplicas = nil
+	cluster, err = c.godisClient.KumkeehyunV1().GodisClusters(namespace).UpdateStatus(context.TODO(), clusterCopy, metav1.UpdateOptions{})
+	return cluster, clusterConfig, err
 }
 
-func (c *Controller) updateClusterStatus(cluster *godisapis.GodisCluster, replicas int) error {
-	clusterCopy := cluster.DeepCopy()
-	clusterCopy.Status.Replicas = int32(replicas)
+func requiresScaleOut(cluster *godisapis.GodisCluster, godisList *godisapis.GodisList) bool {
+	return (cluster.Status.Status == "Running" && int(*cluster.Spec.Replicas) > len(godisList.Items)) ||
+		(cluster.Status.Status == "Scaling" && cluster.Status.ScaleOutID != nil)
+}
 
-	_, err := c.godisClient.KumkeehyunV1().GodisClusters(cluster.Namespace).UpdateStatus(context.TODO(), clusterCopy, metav1.UpdateOptions{})
+func (c *Controller) ScaleOutCluster(cluster *godisapis.GodisCluster, clusterConfig *corev1.ConfigMap, godisList *godisapis.GodisList) error {
+	var err error
+	var newID int
+	namespace := cluster.Namespace
+
+	// update status to scaling
+	if cluster.Status.Status != "Scaling" {
+		clusterCopy := cluster.DeepCopy()
+		clusterCopy.Status.Status = "Scaling"
+		newID, _ = strconv.Atoi(clusterConfig.Data["next-id"])
+		clusterCopy.Status.ScaleOutID = &newID
+		cluster, err = c.godisClient.KumkeehyunV1().GodisClusters(namespace).UpdateStatus(context.TODO(), clusterCopy, metav1.UpdateOptions{})
+		if err != nil {
+			return err
+		}
+	}
+	newID = *cluster.Status.ScaleOutID
+
+	// request forget in config and not in godisList
+
+	// update config
+	clusterConfig, err = c.kubeClient.CoreV1().ConfigMaps(namespace).Update(context.TODO(), newConfigMapForJoin(cluster, clusterConfig, godisList, newID), metav1.UpdateOptions{})
+	if err != nil {
+		return err
+	}
+
+	// request meet command
+
+	err = sendMeetCommand(cluster, newID, godisList)
+	if err != nil {
+		return err
+	}
+
+	// create godis
+	_, err = c.godisClient.KumkeehyunV1().Godises(namespace).Get(context.TODO(), godisName(cluster, newID), metav1.GetOptions{})
+	if errors.IsNotFound(err) {
+		_, err = c.godisClient.KumkeehyunV1().Godises(namespace).Create(context.TODO(), newGodis(cluster, newID, true), metav1.CreateOptions{})
+	}
+	if err != nil {
+		return err
+	}
+
+	// update status to running
+	clusterCopy := cluster.DeepCopy()
+	clusterCopy.Status.Status = "Running"
+	clusterCopy.Status.Replicas = int32(len(strings.Split(clusterConfig.Data["initial-cluster"], ",")))
+	clusterCopy.Status.ScaleOutID = nil
+	_, err = c.godisClient.KumkeehyunV1().GodisClusters(namespace).UpdateStatus(context.TODO(), clusterCopy, metav1.UpdateOptions{})
+
 	return err
+}
+
+func requiresScaleIn(cluster *godisapis.GodisCluster, godisList *godisapis.GodisList) bool {
+	return (cluster.Status.Status == "Running" && int(*cluster.Spec.Replicas) < len(godisList.Items)) ||
+		(cluster.Status.Status == "Scaling" && cluster.Status.ScaleInID != nil)
+}
+
+func (c *Controller) ScaleInCluster(cluster *godisapis.GodisCluster, clusterConfig *corev1.ConfigMap, godisList *godisapis.GodisList) error {
+	return nil
+}
+
+func godisSelector(cluster *godisapis.GodisCluster) labels.Selector {
+	clusterReq, _ := labels.NewRequirement("cluster-name", selection.Equals, []string{cluster.Name})
+	return labels.NewSelector().Add(*clusterReq)
 }
 
 func configMapName(cluster *godisapis.GodisCluster) string {
@@ -227,18 +270,26 @@ func godisServiceFQDN(cluster *godisapis.GodisCluster, id int) string {
 	return fmt.Sprintf("%s.%s.svc.cluster.local", godisServiceName(cluster, id), cluster.Namespace)
 }
 
-func clusterPeers(cluster *godisapis.GodisCluster, replicas int) string {
-	peerURL := func(id int, host string) string {
-		return fmt.Sprintf("%d@http://%s:6300", id, host)
+func godisPeerURL(cluster *godisapis.GodisCluster, id int) string {
+	return fmt.Sprintf("http://%s:6300", godisServiceFQDN(cluster, id))
+}
+
+func clusterPeers(cluster *godisapis.GodisCluster, ids []int) string {
+	initialPeer := func(id int) string {
+		return fmt.Sprintf("%d@%s", id, godisPeerURL(cluster, id))
 	}
-	peers := make([]string, 0, replicas)
-	for id := 1; id <= replicas; id++ {
-		peers = append(peers, peerURL(id, godisServiceFQDN(cluster, id)))
+	peers := make([]string, 0, len(ids))
+	for _, id := range ids {
+		peers = append(peers, initialPeer(id))
 	}
 	return strings.Join(peers, ",")
 }
 
-func newConfigMap(cluster *godisapis.GodisCluster) *corev1.ConfigMap {
+func newConfigMapForInit(cluster *godisapis.GodisCluster, replicas int) *corev1.ConfigMap {
+	ids := make([]int, 0, replicas)
+	for id := 1; id <= replicas; id++ {
+		ids = append(ids, id)
+	}
 	return &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      configMapName(cluster),
@@ -247,9 +298,32 @@ func newConfigMap(cluster *godisapis.GodisCluster) *corev1.ConfigMap {
 				*metav1.NewControllerRef(cluster, godisapis.SchemeGroupVersion.WithKind("GodisCluster")),
 			},
 		},
-		Immutable: nil,
-		Data:      map[string]string{},
+		Data: map[string]string{
+			"next-id":         strconv.Itoa(replicas + 1),
+			"initial-cluster": clusterPeers(cluster, ids),
+		},
 	}
+}
+
+func newConfigMapForJoin(cluster *godisapis.GodisCluster, oldCfg *corev1.ConfigMap, godisList *godisapis.GodisList, newID int) *corev1.ConfigMap {
+	ids := make([]int, 0)
+	for _, godis := range godisList.Items {
+		_, id, _ := splitGodisNameID(godis.Name)
+		if id != newID {
+			ids = append(ids, id)
+		}
+	}
+	ids = append(ids, newID)
+
+	newCfg := oldCfg.DeepCopy()
+	newCfg.Data["next-id"] = strconv.Itoa(newID + 1)
+	newCfg.Data["initial-cluster"] = clusterPeers(cluster, ids)
+	return newCfg
+}
+
+func newConfigMapForRemove(cluster *godisapis.GodisCluster, oldCfg *corev1.ConfigMap) *corev1.ConfigMap {
+	newCfg := oldCfg.DeepCopy()
+	return newCfg
 }
 
 func newGodis(cluster *godisapis.GodisCluster, id int, initial bool) *godisapis.Godis {
@@ -269,4 +343,58 @@ func newGodis(cluster *godisapis.GodisCluster, id int, initial bool) *godisapis.
 			Preferred: initial,
 		},
 	}
+}
+
+func sendMeetCommand(cluster *godisapis.GodisCluster, newID int, godisList *godisapis.GodisList) error {
+	meetCmd := meetReply(cluster, newID)
+	return sendRequest(cluster, godisList, meetCmd)
+}
+
+func meetReply(cluster *godisapis.GodisCluster, newID int) resp.Reply {
+	reply := &resp.ArrayReply{
+		Len:   4,
+		Value: make([]resp.Reply, 4),
+	}
+	reply.Value[0] = &resp.SimpleStringReply{Value: "cluster"}
+	reply.Value[1] = &resp.SimpleStringReply{Value: "meet"}
+	reply.Value[2] = &resp.SimpleStringReply{Value: strconv.Itoa(newID)}
+	reply.Value[3] = &resp.SimpleStringReply{Value: godisPeerURL(cluster, newID)}
+	return reply
+}
+
+func sendForgetCommand(cluster *godisapis.GodisCluster, deletedID int, godisList *godisapis.GodisList) error {
+	forgetCmd := forgetReply(deletedID)
+	return sendRequest(cluster, godisList, forgetCmd)
+}
+
+func forgetReply(deletedID int) resp.Reply {
+	reply := &resp.ArrayReply{
+		Len:   3,
+		Value: make([]resp.Reply, 3),
+	}
+	reply.Value[0] = &resp.SimpleStringReply{Value: "cluster"}
+	reply.Value[1] = &resp.SimpleStringReply{Value: "forget"}
+	reply.Value[2] = &resp.SimpleStringReply{Value: strconv.Itoa(deletedID)}
+	return reply
+}
+
+func sendRequest(cluster *godisapis.GodisCluster, godisList *godisapis.GodisList, reply resp.Reply) error {
+	sendRequestTo := func(id int) error {
+		conn, err := net.Dial("tcp", fmt.Sprintf("%s:6379", godisServiceFQDN(cluster, id)))
+		if err != nil {
+			return err
+		}
+		defer conn.Close()
+
+		return client.SendRequest(conn, reply).Err()
+	}
+
+	for _, godis := range godisList.Items {
+		_, id, _ := splitGodisNameID(godis.Name)
+		if err := sendRequestTo(id); err == nil {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("failed to send meet command")
 }

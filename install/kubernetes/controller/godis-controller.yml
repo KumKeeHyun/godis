@@ -27,6 +27,15 @@ spec:
               properties:
                 replicas:
                   type: integer
+                status:
+                  type: string
+                initialReplicas:
+                  type: integer
+                scaleOutID:
+                  type: integer
+                scaleInID:
+                  type: integer
+
       subresources:
         status: { }
       additionalPrinterColumns:
@@ -38,6 +47,9 @@ spec:
           type: integer
           description: The replicas status
           jsonPath: .status.replicas
+        - name: Status
+          type: string
+          jsonPath: .status.status
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp
