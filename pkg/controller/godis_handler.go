@@ -83,26 +83,12 @@ func (c *Controller) godisSyncHandler(ctx context.Context, key string) error {
 	if err != nil {
 		if errors.IsNotFound(err) {
 			utilruntime.HandleError(fmt.Errorf("godis cluster '%s' in work queue no longer exists", key))
-
-			// delete
-			//err = c.kubeClient.CoreV1().Services(namespace).Delete(context.TODO(), name+"-endpoint", metav1.DeleteOptions{})
-			//if !errors.IsNotFound(err) {
-			//	utilruntime.HandleError(fmt.Errorf("error delete service '%s'", name+"-endpoint"))
-			//	return err
-			//}
-			//
-			//err = c.kubeClient.AppsV1().ReplicaSets(namespace).Delete(context.TODO(), name, metav1.DeleteOptions{})
-			//if !errors.IsNotFound(err) {
-			//	utilruntime.HandleError(fmt.Errorf("error delete replicaSet '%s'", name))
-			//	return err
-			//}
-
 			return nil
 		}
 		return err
 	}
 
-	_, err = c.kubeClient.CoreV1().Services(namespace).Get(context.TODO(), name+"-endpoint", metav1.GetOptions{})
+	_, err = c.kubeClient.CoreV1().Services(namespace).Get(context.TODO(), serviceNameWithGodisName(name), metav1.GetOptions{})
 	if errors.IsNotFound(err) {
 		logger.Info("create godis service", "name", godis.Name)
 		_, err = c.kubeClient.CoreV1().Services(namespace).Create(context.TODO(), newService(godis), metav1.CreateOptions{})
@@ -111,7 +97,7 @@ func (c *Controller) godisSyncHandler(ctx context.Context, key string) error {
 		return err
 	}
 
-	_, err = c.kubeClient.CoreV1().PersistentVolumeClaims(namespace).Get(context.TODO(), "data-"+name, metav1.GetOptions{})
+	_, err = c.kubeClient.CoreV1().PersistentVolumeClaims(namespace).Get(context.TODO(), volumeClaimName(name), metav1.GetOptions{})
 	if errors.IsNotFound(err) {
 		logger.Info("create godis persistentVolumeClaim", "name", godis.Name)
 		_, err = c.kubeClient.CoreV1().PersistentVolumeClaims(namespace).Create(context.TODO(), newVolumeClaim(godis), metav1.CreateOptions{})
@@ -143,7 +129,7 @@ func podLabels(godis *godisapis.Godis) map[string]string {
 func newService(godis *godisapis.Godis) *corev1.Service {
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      godis.Name + "-endpoint",
+			Name:      serviceNameWithGodisName(godis.Name),
 			Namespace: godis.Namespace,
 			OwnerReferences: []metav1.OwnerReference{
 				*metav1.NewControllerRef(godis, godisapis.SchemeGroupVersion.WithKind("Godis")),
@@ -177,7 +163,7 @@ func newService(godis *godisapis.Godis) *corev1.Service {
 func newVolumeClaim(godis *godisapis.Godis) *corev1.PersistentVolumeClaim {
 	return &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "data-" + godis.Name,
+			Name: volumeClaimName(godis.Name),
 			// TODO: 자동으로 지워지게 할지 말지 고민
 			OwnerReferences: []metav1.OwnerReference{
 				*metav1.NewControllerRef(godis, godisapis.SchemeGroupVersion.WithKind("Godis")),
@@ -231,7 +217,7 @@ func newReplicaSet(godis *godisapis.Godis) *appsv1.ReplicaSet {
 							Name: "data",
 							VolumeSource: corev1.VolumeSource{
 								PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-									ClaimName: "data-" + godis.Name,
+									ClaimName: volumeClaimName(godis.Name),
 									ReadOnly:  false,
 								},
 							},
@@ -259,7 +245,7 @@ func newReplicaSet(godis *godisapis.Godis) *appsv1.ReplicaSet {
 									ValueFrom: &corev1.EnvVarSource{
 										ConfigMapKeyRef: &corev1.ConfigMapKeySelector{
 											LocalObjectReference: corev1.LocalObjectReference{
-												Name: clusterName + "-config",
+												Name: configMapName(clusterName),
 											},
 											Key: "initial-cluster",
 										},

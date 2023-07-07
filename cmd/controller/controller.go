@@ -66,6 +66,7 @@ func runController(vp *viper.Viper) error {
 	godisController := controller.New(ctx, kubeClient, godisClient,
 		godisInformerFactory.Kumkeehyun().V1().GodisClusters(),
 		godisInformerFactory.Kumkeehyun().V1().Godises(),
+		controller.NewClient(),
 	)
 
 	// notice that there is no need to run Start methods in a separate goroutine. (i.e. go kubeInformerFactory.Start(ctx.done())

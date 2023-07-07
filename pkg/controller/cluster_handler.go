@@ -3,12 +3,9 @@ package controller
 import (
 	"context"
 	"fmt"
-	"github.com/KumKeeHyun/godis/pkg/client"
-	resp "github.com/KumKeeHyun/godis/pkg/resp/v2"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/selection"
-	"net"
 	"strconv"
 	"strings"
 
@@ -93,7 +90,7 @@ func (c *Controller) clusterSyncHandler(ctx context.Context, key string) error {
 		return err
 	}
 
-	clusterConfig, err := c.kubeClient.CoreV1().ConfigMaps(namespace).Get(ctx, configMapName(cluster), metav1.GetOptions{})
+	clusterConfig, err := c.kubeClient.CoreV1().ConfigMaps(namespace).Get(ctx, configMapName(cluster.Name), metav1.GetOptions{})
 	if errors.IsNotFound(err) || cluster.Status.Status == "Initializing" {
 		logger.Info("initialize new cluster", "name", cluster.Name)
 		cluster, clusterConfig, err = c.initializeCluster(cluster, clusterConfig)
@@ -103,7 +100,7 @@ func (c *Controller) clusterSyncHandler(ctx context.Context, key string) error {
 		}
 		if cluster.Spec.Replicas != nil && *cluster.Spec.Replicas != cluster.Status.Replicas {
 			// for requeuing
-			return fmt.Errorf("remain events")
+			return fmt.Errorf("there are remained events")
 		}
 		return nil
 	}
@@ -124,6 +121,10 @@ func (c *Controller) clusterSyncHandler(ctx context.Context, key string) error {
 	}
 	if err != nil {
 		return err
+	}
+	if cluster.Spec.Replicas != nil && *cluster.Spec.Replicas != cluster.Status.Replicas {
+		// for requeuing
+		return fmt.Errorf("there are remained events")
 	}
 
 	return nil
@@ -153,7 +154,7 @@ func (c *Controller) initializeCluster(cluster *godisapis.GodisCluster, clusterC
 
 	// create godises
 	for id := 1; id <= *cluster.Status.InitialReplicas; id++ {
-		_, err = c.godisClient.KumkeehyunV1().Godises(namespace).Get(context.TODO(), godisName(cluster, id), metav1.GetOptions{})
+		_, err = c.godisClient.KumkeehyunV1().Godises(namespace).Get(context.TODO(), godisName(cluster.Name, id), metav1.GetOptions{})
 		if errors.IsNotFound(err) {
 			_, err = c.godisClient.KumkeehyunV1().Godises(namespace).Create(context.TODO(), newGodis(cluster, id, true), metav1.CreateOptions{})
 		}
@@ -197,7 +198,7 @@ func (c *Controller) ScaleOutCluster(cluster *godisapis.GodisCluster, clusterCon
 	// request forget in config and not in godisList
 	deletedIDs := detectDeletedIDs(clusterConfig, godisList)
 	for _, deletedID := range deletedIDs {
-		err = sendForgetCommand(cluster, deletedID, godisList)
+		err = c.clusterClient.Forget(godisList, deletedID)
 		if err != nil {
 			return err
 		}
@@ -210,13 +211,13 @@ func (c *Controller) ScaleOutCluster(cluster *godisapis.GodisCluster, clusterCon
 	}
 
 	// request meet command
-	err = sendMeetCommand(cluster, newID, godisList)
+	err = c.clusterClient.Meet(godisList, cluster, newID)
 	if err != nil {
 		return err
 	}
 
 	// create godis
-	_, err = c.godisClient.KumkeehyunV1().Godises(namespace).Get(context.TODO(), godisName(cluster, newID), metav1.GetOptions{})
+	_, err = c.godisClient.KumkeehyunV1().Godises(namespace).Get(context.TODO(), godisName(cluster.Name, newID), metav1.GetOptions{})
 	if errors.IsNotFound(err) {
 		_, err = c.godisClient.KumkeehyunV1().Godises(namespace).Create(context.TODO(), newGodis(cluster, newID, false), metav1.CreateOptions{})
 	}
@@ -284,13 +285,13 @@ func (c *Controller) ScaleInCluster(cluster *godisapis.GodisCluster, clusterConf
 	}
 
 	// delete godis
-	err = c.godisClient.KumkeehyunV1().Godises(namespace).Delete(context.TODO(), godisName(cluster, deletedID), metav1.DeleteOptions{})
+	err = c.godisClient.KumkeehyunV1().Godises(namespace).Delete(context.TODO(), godisName(cluster.Name, deletedID), metav1.DeleteOptions{})
 	if err != nil && !errors.IsNotFound(err) {
 		return err
 	}
 
 	// request forget command
-	err = sendForgetCommand(cluster, deletedID, godisList)
+	err = c.clusterClient.Forget(godisList, deletedID)
 	if err != nil {
 		return err
 	}
@@ -317,41 +318,9 @@ func godisSelector(cluster *godisapis.GodisCluster) labels.Selector {
 	return labels.NewSelector().Add(*clusterReq)
 }
 
-func configMapName(cluster *godisapis.GodisCluster) string {
-	return cluster.Name + "-config"
-}
-
-func godisName(cluster *godisapis.GodisCluster, id int) string {
-	return fmt.Sprintf("%s-%d", cluster.Name, id)
-}
-
-func splitGodisNameID(godisName string) (name string, id int, err error) {
-	parts := strings.Split(godisName, "-")
-	if len(parts) < 2 {
-		return "", 0, fmt.Errorf("unexpected godisName format: %s", godisName)
-	}
-	id, err = strconv.Atoi(parts[len(parts)-1])
-	if err != nil {
-		return "", 0, fmt.Errorf("unexpected godisName format: %s", godisName)
-	}
-	return strings.Join(parts[:len(parts)-1], "-"), id, nil
-}
-
-func godisServiceName(cluster *godisapis.GodisCluster, id int) string {
-	return fmt.Sprintf("%s-%d-endpoint", cluster.Name, id)
-}
-
-func godisServiceFQDN(cluster *godisapis.GodisCluster, id int) string {
-	return fmt.Sprintf("%s.%s.svc.cluster.local", godisServiceName(cluster, id), cluster.Namespace)
-}
-
-func godisPeerURL(cluster *godisapis.GodisCluster, id int) string {
-	return fmt.Sprintf("http://%s:6300", godisServiceFQDN(cluster, id))
-}
-
 func clusterPeers(cluster *godisapis.GodisCluster, ids []int) string {
 	initialPeer := func(id int) string {
-		return fmt.Sprintf("%d@%s", id, godisPeerURL(cluster, id))
+		return fmt.Sprintf("%d@%s", id, godisPeerURL(cluster.Namespace, godisName(cluster.Name, id)))
 	}
 	peers := make([]string, 0, len(ids))
 	for _, id := range ids {
@@ -367,7 +336,7 @@ func newConfigMapForInit(cluster *godisapis.GodisCluster, replicas int) *corev1.
 	}
 	return &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      configMapName(cluster),
+			Name:      configMapName(cluster.Name),
 			Namespace: cluster.Namespace,
 			OwnerReferences: []metav1.OwnerReference{
 				*metav1.NewControllerRef(cluster, godisapis.SchemeGroupVersion.WithKind("GodisCluster")),
@@ -416,7 +385,7 @@ func newGodis(cluster *godisapis.GodisCluster, id int, initial bool) *godisapis.
 	}
 	return &godisapis.Godis{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      godisName(cluster, id),
+			Name:      godisName(cluster.Name, id),
 			Namespace: cluster.Namespace,
 			Labels:    godisLabels,
 			OwnerReferences: []metav1.OwnerReference{
@@ -427,58 +396,4 @@ func newGodis(cluster *godisapis.GodisCluster, id int, initial bool) *godisapis.
 			Preferred: initial,
 		},
 	}
-}
-
-func sendMeetCommand(cluster *godisapis.GodisCluster, newID int, godisList *godisapis.GodisList) error {
-	meetCmd := meetReply(cluster, newID)
-	return sendRequest(cluster, godisList, meetCmd)
-}
-
-func meetReply(cluster *godisapis.GodisCluster, newID int) resp.Reply {
-	reply := &resp.ArrayReply{
-		Len:   4,
-		Value: make([]resp.Reply, 4),
-	}
-	reply.Value[0] = &resp.SimpleStringReply{Value: "cluster"}
-	reply.Value[1] = &resp.SimpleStringReply{Value: "meet"}
-	reply.Value[2] = &resp.SimpleStringReply{Value: strconv.Itoa(newID)}
-	reply.Value[3] = &resp.SimpleStringReply{Value: godisPeerURL(cluster, newID)}
-	return reply
-}
-
-func sendForgetCommand(cluster *godisapis.GodisCluster, deletedID int, godisList *godisapis.GodisList) error {
-	forgetCmd := forgetReply(deletedID)
-	return sendRequest(cluster, godisList, forgetCmd)
-}
-
-func forgetReply(deletedID int) resp.Reply {
-	reply := &resp.ArrayReply{
-		Len:   3,
-		Value: make([]resp.Reply, 3),
-	}
-	reply.Value[0] = &resp.SimpleStringReply{Value: "cluster"}
-	reply.Value[1] = &resp.SimpleStringReply{Value: "forget"}
-	reply.Value[2] = &resp.SimpleStringReply{Value: strconv.Itoa(deletedID)}
-	return reply
-}
-
-func sendRequest(cluster *godisapis.GodisCluster, godisList *godisapis.GodisList, reply resp.Reply) error {
-	sendRequestTo := func(id int) error {
-		conn, err := net.Dial("tcp", fmt.Sprintf("%s:6379", godisServiceFQDN(cluster, id)))
-		if err != nil {
-			return err
-		}
-		defer conn.Close()
-
-		return client.SendRequest(conn, reply).Err()
-	}
-
-	for _, godis := range godisList.Items {
-		_, id, _ := splitGodisNameID(godis.Name)
-		if err := sendRequestTo(id); err == nil {
-			return nil
-		}
-	}
-
-	return fmt.Errorf("failed to send meet command")
 }

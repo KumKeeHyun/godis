@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -36,6 +37,8 @@ type Controller struct {
 	clusterQueue workqueue.RateLimitingInterface
 	godisQueue   workqueue.RateLimitingInterface
 	recorder     record.EventRecorder
+
+	clusterClient GodisClusterClient
 }
 
 func New(
@@ -43,7 +46,8 @@ func New(
 	kubeClient kubernetes.Interface,
 	godisClient godisclientset.Interface,
 	clusterInformer godisinformers.GodisClusterInformer,
-	godisInformer godisinformers.GodisInformer) *Controller {
+	godisInformer godisinformers.GodisInformer,
+	clusterClient GodisClusterClient) *Controller {
 	logger := klog.FromContext(ctx)
 
 	// Create event broadcaster
@@ -71,9 +75,11 @@ func New(
 		godisLister:   godisInformer.Lister(),
 		godisSynced:   godisInformer.Informer().HasSynced,
 
-		clusterQueue: workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter()),
+		clusterQueue: workqueue.NewRateLimitingQueue(workqueue.NewItemExponentialFailureRateLimiter(time.Second, 1000*time.Second)),
 		godisQueue:   workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter()),
 		recorder:     recorder,
+
+		clusterClient: clusterClient,
 	}
 
 	logger.Info("Setting up event handlers")
@@ -92,7 +98,10 @@ func New(
 			UpdateFunc: func(oldObj, newObj interface{}) {
 				controller.enqueueGodisEvent(newObj)
 			},
-			DeleteFunc: controller.enqueueGodisEvent,
+			DeleteFunc: func(obj interface{}) {
+				controller.enqueueGodisEvent(obj)
+				controller.handleGodisObject(obj)
+			},
 		},
 	)
 
@@ -117,6 +126,45 @@ func (c *Controller) enqueueGodisEvent(obj interface{}) {
 		return
 	}
 	c.godisQueue.Add(key)
+}
+
+func (c *Controller) handleGodisObject(obj interface{}) {
+	var object metav1.Object
+	var ok bool
+
+	logger := klog.FromContext(context.Background())
+
+	if object, ok = obj.(metav1.Object); !ok {
+		tombstone, ok := obj.(cache.DeletedFinalStateUnknown)
+		if !ok {
+			utilruntime.HandleError(fmt.Errorf("error decoding object, invalid type"))
+			return
+		}
+		object, ok = tombstone.Obj.(metav1.Object)
+		if !ok {
+			utilruntime.HandleError(fmt.Errorf("error decoding object tombstone, invalid type"))
+			return
+		}
+		logger.V(4).Info("Recovered deleted object", "resourceName", object.GetName())
+	}
+
+	logger.V(4).Info("Processing object", "object", klog.KObj(object))
+	if ownerRef := metav1.GetControllerOf(object); ownerRef != nil {
+		// If this object is not owned by a Foo, we should not do anything more
+		// with it.
+		if ownerRef.Kind != "GodisCluster" {
+			return
+		}
+
+		cluster, err := c.clusterLister.GodisClusters(object.GetNamespace()).Get(ownerRef.Name)
+		if err != nil {
+			logger.V(4).Info("Ignore orphaned object", "object", klog.KObj(object), "GodisCluster", ownerRef.Name)
+			return
+		}
+
+		c.enqueueClusterEvent(cluster)
+		return
+	}
 }
 
 // Run will set up the event handlers for types we are interested in, as well
