@@ -64,7 +64,6 @@ func runController(vp *viper.Viper) error {
 	godisInformerFactory := godisinformers.NewSharedInformerFactory(godisClient, time.Second*30)
 
 	godisController := controller.New(ctx, kubeClient, godisClient,
-		kubeInformerFactory.Core().V1().Pods(),
 		godisInformerFactory.Kumkeehyun().V1().GodisClusters(),
 		godisInformerFactory.Kumkeehyun().V1().Godises(),
 	)

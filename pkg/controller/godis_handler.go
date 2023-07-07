@@ -7,6 +7,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -84,28 +85,36 @@ func (c *Controller) godisSyncHandler(ctx context.Context, key string) error {
 			utilruntime.HandleError(fmt.Errorf("godis cluster '%s' in work queue no longer exists", key))
 
 			// delete
-			err = c.kubeClient.CoreV1().Services(namespace).Delete(context.TODO(), name+"-endpoint", metav1.DeleteOptions{})
-			if !errors.IsNotFound(err) {
-				utilruntime.HandleError(fmt.Errorf("error delete service '%s'", name+"-endpoint"))
-				return err
-			}
-
-			err = c.kubeClient.AppsV1().ReplicaSets(namespace).Delete(context.TODO(), name, metav1.DeleteOptions{})
-			if !errors.IsNotFound(err) {
-				utilruntime.HandleError(fmt.Errorf("error delete replicaSet '%s'", name))
-				return err
-			}
+			//err = c.kubeClient.CoreV1().Services(namespace).Delete(context.TODO(), name+"-endpoint", metav1.DeleteOptions{})
+			//if !errors.IsNotFound(err) {
+			//	utilruntime.HandleError(fmt.Errorf("error delete service '%s'", name+"-endpoint"))
+			//	return err
+			//}
+			//
+			//err = c.kubeClient.AppsV1().ReplicaSets(namespace).Delete(context.TODO(), name, metav1.DeleteOptions{})
+			//if !errors.IsNotFound(err) {
+			//	utilruntime.HandleError(fmt.Errorf("error delete replicaSet '%s'", name))
+			//	return err
+			//}
 
 			return nil
 		}
 		return err
 	}
 
-	logger.Info("detect godis event", "name", godis.Name)
-
 	_, err = c.kubeClient.CoreV1().Services(namespace).Get(context.TODO(), name+"-endpoint", metav1.GetOptions{})
 	if errors.IsNotFound(err) {
+		logger.Info("create godis service", "name", godis.Name)
 		_, err = c.kubeClient.CoreV1().Services(namespace).Create(context.TODO(), newService(godis), metav1.CreateOptions{})
+	}
+	if err != nil {
+		return err
+	}
+
+	_, err = c.kubeClient.CoreV1().PersistentVolumeClaims(namespace).Get(context.TODO(), "data-"+name, metav1.GetOptions{})
+	if errors.IsNotFound(err) {
+		logger.Info("create godis persistentVolumeClaim", "name", godis.Name)
+		_, err = c.kubeClient.CoreV1().PersistentVolumeClaims(namespace).Create(context.TODO(), newVolumeClaim(godis), metav1.CreateOptions{})
 	}
 	if err != nil {
 		return err
@@ -113,6 +122,7 @@ func (c *Controller) godisSyncHandler(ctx context.Context, key string) error {
 
 	_, err = c.kubeClient.AppsV1().ReplicaSets(namespace).Get(context.TODO(), name, metav1.GetOptions{})
 	if errors.IsNotFound(err) {
+		logger.Info("create godis pod", "name", godis.Name)
 		_, err = c.kubeClient.AppsV1().ReplicaSets(namespace).Create(context.TODO(), newReplicaSet(godis), metav1.CreateOptions{})
 	}
 	if err != nil {
@@ -130,9 +140,6 @@ func podLabels(godis *godisapis.Godis) map[string]string {
 	}
 }
 
-//	func godisPodName(godis *godisapis.Godis, id int) string {
-//		return fmt.Sprintf("%s-%d", godis.Name, id)
-//	}
 func newService(godis *godisapis.Godis) *corev1.Service {
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
@@ -163,6 +170,27 @@ func newService(godis *godisapis.Godis) *corev1.Service {
 			},
 			Selector: podLabels(godis),
 			Type:     corev1.ServiceTypeClusterIP,
+		},
+	}
+}
+
+func newVolumeClaim(godis *godisapis.Godis) *corev1.PersistentVolumeClaim {
+	return &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "data-" + godis.Name,
+			// TODO: 자동으로 지워지게 할지 말지 고민
+			OwnerReferences: []metav1.OwnerReference{
+				*metav1.NewControllerRef(godis, godisapis.SchemeGroupVersion.WithKind("Godis")),
+			},
+		},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+			Resources: corev1.ResourceRequirements{
+				Requests: corev1.ResourceList{
+					corev1.ResourceStorage: resource.MustParse("50Mi"),
+				},
+			},
+			StorageClassName: nil,
 		},
 	}
 }
@@ -198,17 +226,29 @@ func newReplicaSet(godis *godisapis.Godis) *appsv1.ReplicaSet {
 				Spec: corev1.PodSpec{
 					Hostname:  godis.Name,
 					Subdomain: clusterName,
-					//Volumes: []corev1.Volume{
-					//	{
-					//		Name:         "",
-					//		VolumeSource: corev1.VolumeSource{},
-					//	},
-					//},
+					Volumes: []corev1.Volume{
+						{
+							Name: "data",
+							VolumeSource: corev1.VolumeSource{
+								PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+									ClaimName: "data-" + godis.Name,
+									ReadOnly:  false,
+								},
+							},
+						},
+					},
 					Containers: []corev1.Container{
 						{
 							Name:  "godis",
 							Image: "kbzjung359/godis",
 							Args:  []string{"cluster"},
+							VolumeMounts: []corev1.VolumeMount{
+								{
+									Name:      "data",
+									ReadOnly:  false,
+									MountPath: "/tmp/godis",
+								},
+							},
 							Env: []corev1.EnvVar{
 								{
 									Name:  "CLUSTER_ID",
