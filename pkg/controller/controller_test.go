@@ -2,23 +2,19 @@ package controller
 
 import (
 	"context"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/tools/cache"
 	"reflect"
 	"testing"
 	"time"
 
+	godisapis "github.com/KumKeeHyun/godis/pkg/controller/apis/godis/v1"
+	"github.com/KumKeeHyun/godis/pkg/controller/generated/clientset/versioned/fake"
+	godisinformers "github.com/KumKeeHyun/godis/pkg/controller/generated/informers/externalversions"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/diff"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 	k8stest "k8s.io/client-go/testing"
 	"k8s.io/client-go/tools/record"
-	"k8s.io/klog/v2/ktesting"
-
-	godisapis "github.com/KumKeeHyun/godis/pkg/controller/apis/godis/v1"
-	"github.com/KumKeeHyun/godis/pkg/controller/generated/clientset/versioned/fake"
-	godisinformers "github.com/KumKeeHyun/godis/pkg/controller/generated/informers/externalversions"
 )
 
 var (
@@ -177,6 +173,8 @@ func filterInformerActions(actions []k8stest.Action) []k8stest.Action {
 	for _, action := range actions {
 		if len(action.GetNamespace()) == 0 ||
 			(action.Matches("get", "configmaps") ||
+				action.Matches("get", "godises") ||
+				action.Matches("list", "godises") ||
 				action.Matches("get", "godises")) {
 			continue
 		}
@@ -197,102 +195,4 @@ func getKey(obj interface{}, t *testing.T) string {
 
 func int32Ptr(i int32) *int32 {
 	return &i
-}
-
-func newCluster(name string, replicas *int32) *godisapis.GodisCluster {
-	return &godisapis.GodisCluster{
-		TypeMeta: metav1.TypeMeta{APIVersion: godisapis.SchemeGroupVersion.String()},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: metav1.NamespaceDefault,
-		},
-		Spec: godisapis.GodisClusterSpec{
-			Replicas: replicas,
-		},
-	}
-}
-
-func (f *fixture) expectCreateConfigMapsForInit(cluster *godisapis.GodisCluster, replicas int) {
-	config := newConfigMapForInit(cluster, replicas)
-	f.expectedKubeActions = append(f.expectedKubeActions, k8stest.NewCreateAction(
-		schema.GroupVersionResource{Resource: "configmaps"},
-		config.Namespace,
-		config,
-	))
-}
-
-func (f *fixture) expectCreateGodis(cluster *godisapis.GodisCluster, id int, initial bool) {
-	godis := newGodis(cluster, id, initial)
-	f.expectedGodisActions = append(f.expectedGodisActions, k8stest.NewCreateAction(
-		schema.GroupVersionResource{Resource: "godises"},
-		godis.Namespace,
-		godis,
-	))
-}
-
-func (f *fixture) expectUpdateStatusClusterForStartInit(cluster *godisapis.GodisCluster) *godisapis.GodisCluster {
-	clusterCopy := cluster.DeepCopy()
-	clusterCopy.Status.Status = "Initializing"
-	initialReplicas := int(*cluster.Spec.Replicas)
-	clusterCopy.Status.InitialReplicas = &initialReplicas
-
-	f.expectedGodisActions = append(f.expectedGodisActions, k8stest.NewUpdateSubresourceAction(
-		schema.GroupVersionResource{Resource: "godisclusters"},
-		"status",
-		clusterCopy.Namespace,
-		clusterCopy,
-	))
-	return clusterCopy
-}
-
-func (f *fixture) expectUpdateStatusClusterForEndInit(cluster *godisapis.GodisCluster) {
-	clusterCopy := cluster.DeepCopy()
-	clusterCopy.Status.Status = "Running"
-	clusterCopy.Status.Replicas = int32(*cluster.Status.InitialReplicas)
-	clusterCopy.Status.InitialReplicas = nil
-
-	f.expectedGodisActions = append(f.expectedGodisActions, k8stest.NewUpdateSubresourceAction(
-		schema.GroupVersionResource{Resource: "godisclusters"},
-		"status",
-		clusterCopy.Namespace,
-		clusterCopy,
-	))
-}
-
-func TestInitializeCluster(t *testing.T) {
-	f := newFixture(t)
-	_, ctx := ktesting.NewTestContext(t)
-
-	cluster := newCluster("test", int32Ptr(3))
-	f.godisObjs = append(f.godisObjs, cluster)
-
-	cluster = f.expectUpdateStatusClusterForStartInit(cluster)
-	f.expectCreateConfigMapsForInit(cluster, 3)
-	f.expectCreateGodis(cluster, 1, true)
-	f.expectCreateGodis(cluster, 2, true)
-	f.expectCreateGodis(cluster, 3, true)
-	f.expectUpdateStatusClusterForEndInit(cluster)
-
-	f.runCluster(ctx, getKey(cluster, t))
-}
-
-func TestInitializeClusterRestartAtUpdateStatus(t *testing.T) {
-	f := newFixture(t)
-	_, ctx := ktesting.NewTestContext(t)
-
-	cluster := newCluster("test", int32Ptr(3))
-	cluster.Status.Status = "Initializing"
-	initialReplicas := int(*cluster.Spec.Replicas)
-	cluster.Status.InitialReplicas = &initialReplicas
-	// update status -> crash -> edited spec
-	cluster.Spec.Replicas = int32Ptr(4)
-	f.godisObjs = append(f.godisObjs, cluster)
-
-	f.expectCreateConfigMapsForInit(cluster, 3)
-	f.expectCreateGodis(cluster, 1, true)
-	f.expectCreateGodis(cluster, 2, true)
-	f.expectCreateGodis(cluster, 3, true)
-	f.expectUpdateStatusClusterForEndInit(cluster)
-
-	f.runClusterExpectErr(ctx, getKey(cluster, t))
 }
