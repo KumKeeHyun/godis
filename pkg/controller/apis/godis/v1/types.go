@@ -21,6 +21,7 @@ type GodisClusterSpec struct {
 
 type GodisClusterStatus struct {
 	Replicas        int32  `json:"replicas"`
+	NextID          int    `json:"nextID"`
 	Status          string `json:"status"`
 	InitialReplicas *int   `json:"initialReplicas"`
 	ScaleOutID      *int   `json:"scaleOutID"`

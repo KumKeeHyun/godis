@@ -47,7 +47,7 @@ func (c *Controller) processNextGodisItem(ctx context.Context) bool {
 
 		// Run the syncHandler, passing it the namespace/name string of the
 		// Godis resource to be synced.
-		if err := c.godisSyncHandler(ctx, key); err != nil {
+		if err := c.syncGodis(ctx, key); err != nil {
 			// Put the item back on the workqueue to handle any transient errors.
 			c.godisQueue.AddRateLimited(key)
 			return fmt.Errorf("error syncing '%s': %s, requeuing", key, err.Error())
@@ -66,10 +66,10 @@ func (c *Controller) processNextGodisItem(ctx context.Context) bool {
 	return true
 }
 
-// godisSyncHandler compares the actual state with the desired, and attempts to
+// syncGodis compares the actual state with the desired, and attempts to
 // converge the two. It then updates the Status block of the Godis resource
 // with the current status of the resource.
-func (c *Controller) godisSyncHandler(ctx context.Context, key string) error {
+func (c *Controller) syncGodis(ctx context.Context, key string) error {
 	logger := klog.LoggerWithValues(klog.FromContext(ctx), "kind", "Godis", "resourceName", key)
 
 	// Convert the namespace/name string into a distinct namespace and name

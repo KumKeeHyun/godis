@@ -27,6 +27,8 @@ spec:
               properties:
                 replicas:
                   type: integer
+                nextID:
+                  type: integer
                 status:
                   type: string
                 initialReplicas:

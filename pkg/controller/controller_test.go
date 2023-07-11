@@ -24,11 +24,11 @@ var (
 
 type mockGodisClusterClient struct{}
 
-func (c *mockGodisClusterClient) Meet(godisList *godisapis.GodisList, cluster *godisapis.GodisCluster, newID int) error {
+func (c *mockGodisClusterClient) Meet(godises []*godisapis.Godis, newID int) error {
 	return nil
 }
 
-func (c *mockGodisClusterClient) Forget(godisList *godisapis.GodisList, deletedID int) error {
+func (c *mockGodisClusterClient) Forget(godises []*godisapis.Godis, deletedID int) error {
 	return nil
 }
 
@@ -91,7 +91,7 @@ func (f *fixture) runClusterExpectErr(ctx context.Context, clusterKey string) {
 func (f *fixture) runControllerCluster(ctx context.Context, clusterKey string, expectErr bool) {
 	c := f.newController(ctx)
 
-	err := c.clusterSyncHandler(ctx, clusterKey)
+	err := c.syncCluster(ctx, clusterKey)
 	if !expectErr && err != nil {
 		f.t.Errorf("error syncing cluster: %v", err)
 	} else if expectErr && err == nil {
