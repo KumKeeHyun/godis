@@ -58,11 +58,8 @@ type raftNode struct {
 	cancel context.CancelFunc
 }
 
-var defaultSnapshotCount uint64 = 5
-var defaultSnapshotCatchUpEntries uint64 = 1
-
-//var defaultSnapshotCount uint64 = 10_000
-//var defaultSnapshotCatchUpEntries uint64 = 10_000
+var defaultSnapshotCount uint64 = 10_000
+var defaultSnapshotCatchUpEntries uint64 = 10_000
 
 func newRaftNode(
 	ctx context.Context,
