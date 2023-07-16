@@ -8,7 +8,7 @@ ENV GO111MODULE=on \
 WORKDIR /build
 COPY . .
 RUN go mod download
-RUN go build -o godis .
+RUN go build -o godis -ldflags="-s -w" -trimpath .
 
 WORKDIR /dist
 RUN cp /build/godis .
