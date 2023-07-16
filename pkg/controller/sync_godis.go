@@ -16,6 +16,8 @@ import (
 	"strconv"
 )
 
+var godisControllerKind = godisapis.SchemeGroupVersion.WithKind("Godis")
+
 // runGodisWorker is a long-running function that will continually call the
 // processNextWorkItem function in order to read and process a message on the
 // workqueue.
@@ -90,7 +92,7 @@ func (c *Controller) syncGodis(ctx context.Context, key string) error {
 
 	_, err = c.kubeClient.CoreV1().Services(namespace).Get(context.TODO(), serviceNameWithGodisName(name), metav1.GetOptions{})
 	if errors.IsNotFound(err) {
-		logger.Info("create godis service", "name", godis.Name)
+		logger.Info("create godis service")
 		_, err = c.kubeClient.CoreV1().Services(namespace).Create(context.TODO(), newService(godis), metav1.CreateOptions{})
 	}
 	if err != nil {
@@ -99,7 +101,7 @@ func (c *Controller) syncGodis(ctx context.Context, key string) error {
 
 	_, err = c.kubeClient.CoreV1().PersistentVolumeClaims(namespace).Get(context.TODO(), volumeClaimName(name), metav1.GetOptions{})
 	if errors.IsNotFound(err) {
-		logger.Info("create godis persistentVolumeClaim", "name", godis.Name)
+		logger.Info("create godis persistentVolumeClaim")
 		_, err = c.kubeClient.CoreV1().PersistentVolumeClaims(namespace).Create(context.TODO(), newVolumeClaim(godis), metav1.CreateOptions{})
 	}
 	if err != nil {
@@ -108,7 +110,7 @@ func (c *Controller) syncGodis(ctx context.Context, key string) error {
 
 	_, err = c.kubeClient.AppsV1().ReplicaSets(namespace).Get(context.TODO(), name, metav1.GetOptions{})
 	if errors.IsNotFound(err) {
-		logger.Info("create godis pod", "name", godis.Name)
+		logger.Info("create godis pod")
 		_, err = c.kubeClient.AppsV1().ReplicaSets(namespace).Create(context.TODO(), newReplicaSet(godis), metav1.CreateOptions{})
 	}
 	if err != nil {
@@ -132,7 +134,7 @@ func newService(godis *godisapis.Godis) *corev1.Service {
 			Name:      serviceNameWithGodisName(godis.Name),
 			Namespace: godis.Namespace,
 			OwnerReferences: []metav1.OwnerReference{
-				*metav1.NewControllerRef(godis, godisapis.SchemeGroupVersion.WithKind("Godis")),
+				*metav1.NewControllerRef(godis, godisControllerKind),
 			},
 		},
 		Spec: corev1.ServiceSpec{
@@ -166,7 +168,7 @@ func newVolumeClaim(godis *godisapis.Godis) *corev1.PersistentVolumeClaim {
 			Name: volumeClaimName(godis.Name),
 			// TODO: 자동으로 지워지게 할지 말지 고민
 			OwnerReferences: []metav1.OwnerReference{
-				*metav1.NewControllerRef(godis, godisapis.SchemeGroupVersion.WithKind("Godis")),
+				*metav1.NewControllerRef(godis, godisControllerKind),
 			},
 		},
 		Spec: corev1.PersistentVolumeClaimSpec{
@@ -193,7 +195,7 @@ func newReplicaSet(godis *godisapis.Godis) *appsv1.ReplicaSet {
 			Namespace: godis.Namespace,
 			Labels:    labels,
 			OwnerReferences: []metav1.OwnerReference{
-				*metav1.NewControllerRef(godis, godisapis.SchemeGroupVersion.WithKind("Godis")),
+				*metav1.NewControllerRef(godis, godisControllerKind),
 			},
 		},
 		Spec: appsv1.ReplicaSetSpec{
@@ -205,9 +207,9 @@ func newReplicaSet(godis *godisapis.Godis) *appsv1.ReplicaSet {
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: labels,
-					OwnerReferences: []metav1.OwnerReference{
-						*metav1.NewControllerRef(godis, godisapis.SchemeGroupVersion.WithKind("Godis")),
-					},
+					//OwnerReferences: []metav1.OwnerReference{
+					//	*metav1.NewControllerRef(godis, godisControllerKind),
+					//},
 				},
 				Spec: corev1.PodSpec{
 					Hostname:  godis.Name,

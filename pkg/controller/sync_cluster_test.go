@@ -156,6 +156,28 @@ func TestClusterInitializeRestartingAtUpdateStatus(t *testing.T) {
 	f.runCluster(ctx, getKey(cluster, t))
 }
 
+func TestClusterInitializeRestartingAtCreateGodis(t *testing.T) {
+	f := newFixture(t)
+	_, ctx := ktesting.NewTestContext(t)
+
+	cluster := newCluster("test", int32Ptr(3))
+	cluster.Status.Status = "Initializing"
+	initialReplicas := int(*cluster.Spec.Replicas)
+	cluster.Status.InitialReplicas = &initialReplicas
+	// update status -> crash -> edited spec
+	cluster.Spec.Replicas = int32Ptr(4)
+	f.godisObjs = append(f.godisObjs, cluster)
+	f.godisObjs = append(f.godisObjs, newGodis(cluster, 2, true))
+
+	f.expectCreateConfigMapsForInit(cluster, 3)
+	f.expectCreateGodis(cluster, 1, true)
+	f.expectCreateGodis(cluster, 2, true)
+	f.expectCreateGodis(cluster, 3, true)
+	f.expectUpdateStatusClusterForEndInit(cluster)
+
+	f.runCluster(ctx, getKey(cluster, t))
+}
+
 func TestClusterScaleOut(t *testing.T) {
 	f := newFixture(t)
 	_, ctx := ktesting.NewTestContext(t)
