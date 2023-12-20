@@ -36,9 +36,15 @@ type StoreCommand interface {
 var parserFns = map[string]cmdParseFn{
 	"hello":   parseHello,
 	"cluster": parseCluster,
-	"set":     parseSet,
-	"get":     parseGet,
-	"mget":    parseMGet,
+
+	"set":  parseSet,
+	"get":  parseGet,
+	"mget": parseMGet,
+
+	"sadd":     parseSAdd,
+	"scard":    parseSCard,
+	"smembers": parseSMembers,
+	"srem":     parseSRem,
 }
 
 func Parse(r resp.Reply) Command {

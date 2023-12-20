@@ -72,6 +72,10 @@ type IntegerReply struct {
 	Value int
 }
 
+func NewIntegerReply(val int) *IntegerReply {
+	return &IntegerReply{Value: val}
+}
+
 func (r *IntegerReply) Type() ReplyType {
 	return INTEGER
 }
@@ -116,6 +120,10 @@ func (r *BulkStringReply) Get() string {
 
 func (r *BulkStringReply) IsNil() bool {
 	return r.Len == -1
+}
+
+func NewNilArrayReply() *ArrayReply {
+	return &ArrayReply{Len: -1}
 }
 
 type ArrayReply struct {

@@ -45,6 +45,10 @@ func getWriteCommand(cmd string) WriteCommand {
 	switch cmd {
 	case "set":
 		return &Set{}
+	case "sadd":
+		return &SAdd{}
+	case "srem":
+		return &SRem{}
 	default:
 		return nil
 	}

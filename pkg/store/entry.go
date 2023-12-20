@@ -55,3 +55,22 @@ func NewStrEntry(key, val string) *StringEntry {
 func (e *StringEntry) Type() string {
 	return "String"
 }
+
+type SetEntry struct {
+	BaseEntry
+	Val map[string]struct{} `json:"val"`
+}
+
+func NewSetEntry(key string) *SetEntry {
+	return &SetEntry{
+		BaseEntry: BaseEntry{
+			K:    key,
+			HIdx: -1,
+		},
+		Val: make(map[string]struct{}),
+	}
+}
+
+func (e SetEntry) Type() string {
+	return "Set"
+}
