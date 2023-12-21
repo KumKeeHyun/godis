@@ -5,6 +5,7 @@ import (
 	resp "github.com/KumKeeHyun/godis/pkg/resp/v2"
 	"go.etcd.io/etcd/raft/v3/raftpb"
 	"net/url"
+	"strings"
 )
 
 var clusterParseFns = map[string]cmdParseFn{
@@ -13,7 +14,7 @@ var clusterParseFns = map[string]cmdParseFn{
 }
 
 var parseCluster cmdParseFn = func(replies []resp.Reply) Command {
-	cmdName := mustString(replies[1])
+	cmdName := strings.ToLower(mustString(replies[1]))
 	parse, exists := clusterParseFns[cmdName]
 	if !exists {
 		return &invalidCommand{errors.New("ERR unknown command")}

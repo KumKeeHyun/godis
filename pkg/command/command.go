@@ -7,6 +7,7 @@ import (
 	"github.com/KumKeeHyun/godis/pkg/store"
 	"go.etcd.io/etcd/raft/v3/raftpb"
 	"strconv"
+	"strings"
 )
 
 type (
@@ -36,6 +37,9 @@ type StoreCommand interface {
 var parserFns = map[string]cmdParseFn{
 	"hello":   parseHello,
 	"cluster": parseCluster,
+	"config":  parseConfig,
+
+	"keys": parseKeys,
 
 	"set":  parseSet,
 	"get":  parseGet,
@@ -56,7 +60,7 @@ func Parse(r resp.Reply) Command {
 		return &invalidCommand{errors.New("empty request")}
 	}
 
-	cmdName := mustString(arrReply.Value[0])
+	cmdName := strings.ToLower(mustString(arrReply.Value[0]))
 	parse, exists := parserFns[cmdName]
 	if !exists {
 		return &invalidCommand{errors.New("ERR unknown command")}

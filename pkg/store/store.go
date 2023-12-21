@@ -100,6 +100,14 @@ type Tx struct {
 	s *Store
 }
 
+func (tx *Tx) Keys() (keys []string) {
+	keys = make([]string, 0, len(tx.s.hmap))
+	for key := range tx.s.hmap {
+		keys = append(keys, key)
+	}
+	return
+}
+
 func (tx *Tx) Lookup(key string) (entry Entry, err error) {
 	entry = tx.s.hmap[key]
 	return
